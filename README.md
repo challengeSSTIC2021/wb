@@ -1,4 +1,4 @@
-## Whitebox
+# Whitebox
 
 Une whitebox camellia-128 avec suffix fixé.
 
@@ -9,7 +9,7 @@ Le but du challenge est soit:
 
 La whitebox est placée dans une mini-vm. Le code et les tables de la VM sont mélangés dans une table.
 
-# Utilisation
+## Utilisation
 
 La lib fournit 2 fonctions:
 
@@ -18,7 +18,7 @@ La lib fournit 2 fonctions:
 
 La whitebox n'est pas efficace pour chiffrer un message (doublement de la taille par rapport au clair), mais permet de signer un hash (de 8 bits) avec une clef et un suffix.
 
-# Dépencance
+## Dépencance
 
 - cmake >= 3.12
 - make
@@ -26,7 +26,7 @@ La whitebox n'est pas efficace pour chiffrer un message (doublement de la taille
 - python3
 - python\_camellia (utiliser pour vérifier la whitebox lors du build)
 
-# Compilation
+## Compilation
 
 ```
 mkdir whitebox_builder/build
@@ -38,18 +38,18 @@ make
 WB\_SUFFIX correspond au suffix de la whitebox, WB\_KEY à la clef de la whitebox (pour camellia-128), WB\_AESENC\_KEY pour la clef
 de chiffrement de la table de la whitebox.
 
-# Protection
+## Protection
 
 La table de la whitebox est chiffré avec AES-128-CTR et déchiffré par un constructeur. La clef AES est pour le moment
 en clair. Cela permet de limiter l'analyse de la table si la lib n'est pas chargée.
 
-# Protection possible
+## Protection possible
 
 - Ajout de détection de ptrace dans le constructeur (corruption de la clef AES en cas de positif)
 - Ajout de prctl(PR\_GET\_DUMPABLE) (le binaire est obligé de faire prctl(PR\_SET\_DUMPABLE) avant de charger la lib)
 - Vérification d'intégrité (sur quoi, comment, ...)
 
-# Ajustement de la difficulté
+## Ajustement de la difficulté
 
 - Oracle de déchiffrement. Si les 8 premiers octets du clair ne sont pas un hash du message, le serveur renvoie le clair.
   Permet d'attaquer facilement le suffix.
