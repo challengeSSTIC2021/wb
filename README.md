@@ -84,3 +84,12 @@ en clair. Cela permet de limiter l'analyse de la table si la lib n'est pas charg
 
   Peut être activé dans 'writer.py::VMWriter::__init__(shuffleOperand=True)'
 
+## Docker compose
+
+Un docker compose contient une image de compilation et une image nginx qui propose la dernière lib compilé.
+
+Les arguments (clef, suffixe) sont à placer dans le docker-compose.yml
+- La clef sera une clef maître. à chaque compilation, les 4 derniers octets de la clef sont xoré avec le timestamp.
+- Le suffix est séparé en deux parties:
+    - les 4 permiers octets correspondent au timestamp de la whitebox (qui sert d'identifiant)
+    - les 4 octets suivants doivent être passé en paramêtre de l'image de compilation.

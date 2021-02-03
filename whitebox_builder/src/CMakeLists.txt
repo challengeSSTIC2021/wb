@@ -9,7 +9,7 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include")
 
 add_custom_command(
   OUTPUT  "${CMAKE_CURRENT_BINARY_DIR}/include/AESKEY.h"
-  COMMAND python "${CMAKE_CURRENT_SOURCE_DIR}/wb_gen/genAES.py" --out "${CMAKE_CURRENT_BINARY_DIR}/include/AESKEY.h" --aesKey "${WB_AESENC_KEY}"
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/wb_gen/genAES.py" --out "${CMAKE_CURRENT_BINARY_DIR}/include/AESKEY.h" --aesKey "${WB_AESENC_KEY}"
 )
 add_custom_target(gen_header DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/include/AESKEY.h")
 
@@ -40,5 +40,5 @@ target_link_libraries(test wblib)
 ADD_CUSTOM_COMMAND(
         TARGET test
         POST_BUILD
-        COMMAND python "${CMAKE_CURRENT_SOURCE_DIR}/wb_gen/check_test.py" -k "${WB_KEY}" -t $<TARGET_FILE:test>
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/wb_gen/check_test.py" -k "${WB_KEY}" -t $<TARGET_FILE:test>
     )

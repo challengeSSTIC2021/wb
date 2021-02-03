@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # based on https://embeddedsw.net/zip/Camellia_Original.zip
 
