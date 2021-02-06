@@ -21,7 +21,7 @@ int main() {
   printf("input: ");
   printHex(message, 16);
 
-  encryptVM(message, out);
+  useVM(message, out);
 
   printf("output: ");
   printHex(out, 16);

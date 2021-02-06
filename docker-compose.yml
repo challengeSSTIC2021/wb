@@ -5,15 +5,16 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - sharedVol:/var/www
+      - sharedVol:/var/www/api/.wb_generator
+      - filesVol:/var/www/files
     cap_drop:
       - ALL
   build:
     build: ./whitebox_builder
     # set the key after -k
     # set the time between two compile after -t
-    # set the lower suffix after -s
-    command: ["-k", "00000000000000000000000000000000", "-t", "5", "-s", "00000000"]
+    # set the suffix after -s
+    command: ["-k", "8899aabbccddeeff0011223344556677", "-t", "5", "-s", "0011223344556677"]
     volumes:
       - sharedVol:/home/docker-user/out
     cap_drop:
@@ -21,4 +22,5 @@ services:
     network_mode: "none"
 volumes:
   sharedVol: {}
+  filesVol: {}
 

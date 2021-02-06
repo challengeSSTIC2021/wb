@@ -268,6 +268,17 @@ class VMWriter(Writer):
         self.bloc.append(bloc)
         return name
 
+    def addWriteIdentBloc(self, ident):
+        name = VMGenerator.LabelInst.getNextID()
+        bloc = []
+        bloc.append(VMGenerator.LabelInst(name))
+        for i in range(len(ident)):
+            bloc.append(VMGenerator.SetReg(self.instManager, 0, ident[i]))
+            bloc.append(VMGenerator.SetOutput(self.instManager, 0, i))
+        bloc.append(VMGenerator.RetInst(self.instManager, 0))
+        self.bloc.append(bloc)
+        return name
+
     def addVerifySuffixBloc(self, labelError, labelWB):
 
         name = VMGenerator.LabelInst.getNextID()
@@ -318,12 +329,13 @@ class VMWriter(Writer):
             bloc.insert(0, VMGenerator.LabelInst(label))
         self.bloc.append(bloc)
 
-    def Generate(self, aeskey=None):
+    def Generate(self, ident=None, aeskey=None):
         param_encodeVM = 0
         param_getSuffix = 1
-        param_keyShedule = 2
-        param_encode = 3
-        param_decode = 4
+        param_getIdent = 2
+        param_keyShedule = 3
+        param_encode = 4
+        param_decode = 5
 
         wb_code = self.code
         labelWB = VMGenerator.LabelInst.getNextID()
@@ -332,10 +344,11 @@ class VMWriter(Writer):
         self.code = []
 
         labelSuffix = self.addWriteSuffixBloc()
+        labelIdent = self.addWriteIdentBloc(ident or b'\x00\x00\x00\x00')
         labelError = VMGenerator.LabelInst.getNextID()
         labelVerifySuffix = self.addVerifySuffixBloc(labelError, labelWB)
 
-        entries = {param_encodeVM: labelVerifySuffix, param_getSuffix: labelSuffix}
+        entries = {param_encodeVM: labelVerifySuffix, param_getSuffix: labelSuffix, param_getIdent: labelIdent}
         if self.rawImplem:
             from CamelliaWriter import CamelliaWriter
             camelliaWriter = CamelliaWriter(self)
@@ -391,6 +404,7 @@ class VMWriter(Writer):
         context = self.instManager.generateContext()
         context['param_encodeVM'] = param_encodeVM
         context['param_getSuffix'] = param_getSuffix
+        context['param_getIdent'] = param_getIdent
 
         context['has_rawImplem'] = 1 if self.rawImplem else 0
         context['param_keyShedule'] = param_keyShedule
@@ -541,7 +555,7 @@ static int runVM(unsigned char* input, unsigned char* output) {{
     }}
 }}
 
-__attribute__((visibility("default"))) int encryptVM(const unsigned char* input, unsigned char* output) {{
+__attribute__((visibility("default"))) int useVM(const unsigned char* input, unsigned char* output) {{
     unsigned char buff[17];
     buff[0] = {param_encodeVM};
     memcpy(buff + 1, input, 16);
@@ -550,6 +564,11 @@ __attribute__((visibility("default"))) int encryptVM(const unsigned char* input,
 
 __attribute__((visibility("default"))) int getSuffix(unsigned char* output) {{
     unsigned char buff = {param_getSuffix};
+    return runVM(&buff, output);
+}}
+
+__attribute__((visibility("default"))) int getIdent(unsigned char* output) {{
+    unsigned char buff = {param_getIdent};
     return runVM(&buff, output);
 }}
 

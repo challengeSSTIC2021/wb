@@ -815,6 +815,7 @@ if __name__ == '__main__':
     parser.add_argument("--vmout", type=str, help="export whitebox in a c file with a VM")
     parser.add_argument("-q", "--quiet", action='store_true', help="Don't display the key")
 
+    parser.add_argument("--id", type=hexArg(4), help="whitebox suffix (in hexa) (default: 00000000)")
     parser.add_argument("--suffix", type=hexArg(8), help="whitebox suffix (in hexa) (default: 0000000000000000)")
     parser.add_argument("--aesKey", type=hexArg(16), help="VM aes cipher key (AES-128-CTR) (in hexa) (default: None)")
 
@@ -829,6 +830,7 @@ if __name__ == '__main__':
 
     suffix = args.suffix
     key = args.key
+    ident = args.id
 
     if not suffix:
         suffix = secrets.token_bytes(8)
@@ -852,4 +854,4 @@ if __name__ == '__main__':
         if not args.quiet and args.aesKey is not None:
             print('Cipher VMTable with {}'.format(args.aesKey.hex()))
         with open(args.vmout, 'w') as f:
-            f.write(whitebox.writeCode(VMWriter).Generate(args.aesKey))
+            f.write(whitebox.writeCode(VMWriter).Generate(ident=ident, aeskey=args.aesKey))

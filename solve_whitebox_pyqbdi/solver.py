@@ -36,7 +36,7 @@ class Tracer:
     def __init__(self, path):
         self.lib = ctypes.cdll.LoadLibrary(path)
         self.addr_getSuffix = ctypes.cast(self.lib.getSuffix, ctypes.c_void_p).value
-        self.addr_encryptVM = ctypes.cast(self.lib.encryptVM, ctypes.c_void_p).value
+        self.addr_encryptVM = ctypes.cast(self.lib.runVM, ctypes.c_void_p).value
 
         # init VM
         self.vm = pyqbdi.VM()

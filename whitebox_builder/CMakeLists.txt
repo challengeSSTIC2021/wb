@@ -32,10 +32,11 @@ endmacro()
 VERIFY_HEX( WB_SUFFIX "${WB_SUFFIX}" 16)
 VERIFY_HEX( WB_KEY "${WB_KEY}" 32)
 VERIFY_HEX( WB_AESENC_KEY "${WB_AESENC_KEY}" 32)
+VERIFY_HEX( WB_ID "${WB_ID}" 8)
 
 add_custom_command(
   OUTPUT  WB_VM.c
-  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/wb_gen/genWhitebox.py" --vmout "${CMAKE_CURRENT_BINARY_DIR}/WB_VM.c" --suffix "${WB_SUFFIX}" --key "${WB_KEY}" --aesKey "${WB_AESENC_KEY}" -q
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/wb_gen/genWhitebox.py" --vmout "${CMAKE_CURRENT_BINARY_DIR}/WB_VM.c" --suffix "${WB_SUFFIX}" --key "${WB_KEY}" --aesKey "${WB_AESENC_KEY}" --id "${WB_ID}" -q
 )
 
 add_library(wblib SHARED WB_VM.c)

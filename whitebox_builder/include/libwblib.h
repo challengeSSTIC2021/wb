@@ -8,8 +8,10 @@ static const unsigned output_size = 16;
 // return 0 on success, 1 on error
 // input: 16 bytes to encrypt, the last 8 must be the suffix
 // output: the cipher of the 16 bytes messages
-int encryptVM(const unsigned char* input, unsigned char* output);
+int useVM(const unsigned char* input, unsigned char* output);
 
 int getSuffix(unsigned char* suffix);
+
+int getIdent(unsigned char* suffix);
 
 #endif

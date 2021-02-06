@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import datetime
+from hashlib import sha256
 import os
 import secrets
 import struct
@@ -14,13 +15,14 @@ OUT_DIR = os.environ.get("OUT_DIR", os.path.abspath(os.path.dirname(SRC_DIR) + "
 def build(suffix, mkey, outdir):
 
     ts = int(datetime.datetime.now().timestamp())
-    suffix_full = struct.pack('<I', ts) + suffix
-    key = mkey[:12] + struct.pack('<I', ts ^ struct.unpack('<I', mkey[12:])[0])
+    ident = struct.pack('<I', ts)
+    key = sha256(mkey + ident).digest()[:16]
 
     with tempfile.TemporaryDirectory() as builddir:
         subprocess.run(["cmake", SRC_DIR, "-G", "Ninja",
-            "-DWB_SUFFIX={}".format(suffix_full.hex()),
+            "-DWB_SUFFIX={}".format(suffix.hex()),
             "-DWB_KEY={}".format(key.hex()),
+            "-DWB_ID={}".format(ident.hex()),
             "-DWB_AESENC_KEY={}".format(secrets.token_hex(16))],
             cwd=builddir, check=True, capture_output=True)
         subprocess.run(["ninja"], cwd=builddir, check=True, capture_output=True)
@@ -62,7 +64,7 @@ if __name__ == '__main__':
     parser.add_argument("-o", "--out", type=str, help="output directory", default=OUT_DIR)
     parser.add_argument("-k", "--key", type=hexArg(16), help="whitebox master key (in hexa)", required=True)
     parser.add_argument("-t", "--timer", type=int, help="Duration between two generations", required=True)
-    parser.add_argument("-s", "--suffix", type=hexArg(4), help="The last 4 bytes of the suffix (in hexa)", required=True)
+    parser.add_argument("-s", "--suffix", type=hexArg(8), help="The 8 bytes of the suffix (in hexa)", required=True)
 
     args = parser.parse_args()
 
