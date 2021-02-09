@@ -8,12 +8,8 @@
 #include <unistd.h>
 
 #include "wb_loader.h"
-
-#define BASE_URL "http://127.0.0.1:8080/"
-#define AUTH_API BASE_URL "api/auth.so"
-#define GUEST_API BASE_URL "api/guest.so"
-
-#define TIMEOUT_VM  1000
+#include "key-client.h"
+#include "config.h"
 
 struct {
     char* currentlogin;
@@ -25,6 +21,24 @@ struct {
     int (*getSuffix)(unsigned char*);
     int (*getIdent)(unsigned char*);
 } internal_state;
+
+static inline VMError hsign_raw(uint64_t toSign, struct vmsign* out) {
+    if (internal_state.getSuffix == NULL || internal_state.getIdent == NULL || internal_state.useVM == NULL) {
+        return VM_INTERNAL_ERROR;
+    }
+    internal_state.getIdent((unsigned char*) out->ident);
+
+    unsigned char b[16];
+    *( (uint64_t*) &b) = toSign;
+    internal_state.getSuffix(&b[8]);
+
+    int t = internal_state.useVM(b, (unsigned char*) out->data);
+    if (t != 0) {
+        return VM_SIGN_FAIL;
+    } else {
+        return VM_OK;
+    }
+}
 
 static VMError close_state() {
     if (internal_state.libhandle == NULL) {
@@ -45,7 +59,7 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdat
     return write(fd, ptr, size*nmemb);
 }
 
-static VMError open_state() {
+static inline VMError open_state_internal() {
     if (internal_state.libhandle != NULL) {
         return VM_OK;
     }
@@ -118,6 +132,39 @@ curlError:
     return VM_INTERNAL_ERROR;
 }
 
+static VMError open_state() {
+    const int retry = 10;
+
+    // retry and check load
+    for (int i = 0; i < retry; i++) {
+        VMError res = open_state_internal();
+        if (res == VM_OK) {
+            struct vmsign s = {0};
+            char out[16] = {0};
+            res = hsign_raw(0, &s);
+            if (res == VM_OK) {
+                uint64_t suffix = get_current_permission();
+                KeyResp r = check_hsign(&s, out);
+                if (r == RESP_CHECK_OK && (*((uint64_t*) out) == 0) && (*((uint64_t*) &out[8]) == suffix)) {
+                    return VM_OK;
+                } else {
+                    fprintf(stderr, "[%d] check_hsign return %d\n", i, r);
+                }
+            } else {
+                fprintf(stderr, "[%d] hsign_raw return %d\n", i, res);
+            }
+        } else {
+            fprintf(stderr, "[%d] open_state_internal return %d\n", i, res);
+        }
+        close_state();
+        if (i == retry - 1) {
+            break;
+        }
+        sleep(1);
+    }
+    return VM_INTERNAL_ERROR;
+}
+
 static int reopen_state() {
     if (internal_state.libhandle != NULL) {
         close_state();
@@ -161,7 +208,7 @@ uint64_t get_current_permission() {
     if (internal_state.getSuffix == NULL) {
         VMError res = open_state();
         if (res != VM_OK) {
-            abort();
+            return 0xffffffffffffffff;
         }
     }
 
@@ -177,32 +224,29 @@ VMError hsign(uint64_t toSign, struct vmsign* out) {
             return res;
         }
     }
-    internal_state.getIdent((unsigned char*) out->ident);
+    VMError res = hsign_raw(toSign, out);
+    if (res != VM_OK) {
+        return res;
+    }
+
     unsigned long VM_ts = *((uint32_t*) out->ident);
     unsigned long current_ts = time(NULL);
 
     if (VM_ts + TIMEOUT_VM < current_ts) {
-        VMError res = reopen_state();
+        res = reopen_state();
         if (res != VM_OK) {
             return res;
         }
-        internal_state.getIdent((unsigned char*) out->ident);
+        res = hsign_raw(toSign, out);
+        if (res != VM_OK) {
+            return res;
+        }
         VM_ts = *((uint32_t*) out->ident);
-        current_ts = time(NULL);
         if (VM_ts + TIMEOUT_VM < current_ts) {
             return VM_INTERNAL_ERROR;
         }
     }
 
-    unsigned char b[16];
-    *( (uint64_t*) &b) = toSign;
-    internal_state.getSuffix(&b[8]);
-
-    int t = internal_state.useVM(b, (unsigned char*) out->data);
-    if (t != 0) {
-        return VM_SIGN_FAIL;
-    } else {
-        return VM_OK;
-    }
+    return VM_OK;
 }
 

@@ -6,7 +6,8 @@ services:
       - "8080:8080"
     volumes:
       - sharedVol:/var/www/api/.wb_generator
-      - filesVol:/var/www/files
+        #- filesVol:/var/www/files
+      - /home/kaname/SSTIC/chall2021/nginx_files:/var/www/files
     cap_drop:
       - ALL
   build:

@@ -4,7 +4,6 @@
 #include <dlfcn.h>
 #include <stdint.h>
 
-
 typedef enum {
     VM_OK = 0,
     VM_SIGN_FAIL = 1,
