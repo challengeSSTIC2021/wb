@@ -134,7 +134,7 @@ def convert_json(p, pretty=False):
 
 def cipher_and_write(content, output_dir):
     key = secrets.token_bytes(16)
-    counter = secrets.token_bytes(16)
+    counter = secrets.token_bytes(12) + b'\x00\x00\x00\x00'
     c = struct.unpack('>QQ', counter)
     int_counter = c[1] | (c[0] << 64)
     obj = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=int_counter))

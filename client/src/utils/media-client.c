@@ -14,21 +14,43 @@
 #include "wb_loader.h"
 #include "config.h"
 #include "crypto_stream.h"
+#include "int128.h"
 
 struct write_data {
     int fd;
     bool decode;
     unsigned char key[16];
     unsigned char counter[16];
+
+    unsigned char buffer[16];
+    size_t buffer_used;
 };
 
 static size_t decode_write_callback(char *ptr, size_t size, size_t nmemb, void *userdata) {
     struct write_data* cb_data = (struct write_data*) userdata;
     if (cb_data->decode) {
-        unsigned char tmp[CURL_MAX_WRITE_SIZE];
-        memcpy(tmp, ptr, size*nmemb);
-        crypto_stream_aes128ctr_xor(tmp, tmp, size*nmemb, cb_data->counter, cb_data->key);
-        return write(cb_data->fd, tmp, size*nmemb);
+        if (size*nmemb > CURL_MAX_WRITE_SIZE) {
+            abort();
+        }
+        unsigned char tmp[CURL_MAX_WRITE_SIZE + 16];
+
+        memcpy(tmp, cb_data->buffer, cb_data->buffer_used);
+        memcpy(tmp + cb_data->buffer_used, ptr, size*nmemb);
+
+        size_t real_size = size*nmemb + cb_data->buffer_used;
+        size_t increment = real_size >> 4;
+        size_t l_uncipher = increment << 4;
+        crypto_stream_aes128ctr_xor(tmp, tmp, l_uncipher, cb_data->counter, cb_data->key);
+        store32_bigendian(&cb_data->counter[12], increment + load32_bigendian(&cb_data->counter[12]));
+
+        memcpy(cb_data->buffer, tmp + l_uncipher, real_size - l_uncipher);
+        cb_data->buffer_used = real_size - l_uncipher;
+
+        if (write(cb_data->fd, tmp, l_uncipher) == l_uncipher) {
+            return size*nmemb;
+        } else {
+            return 0;
+        }
     } else {
         return write(cb_data->fd, ptr, size*nmemb);
     }
@@ -67,6 +89,12 @@ static inline MediaResp download_media(const char* name, struct write_data *cb_d
 
     if (http_code != 200) {
         return MEDIA_UNKNOW;
+    }
+
+    if (cb_data->decode && cb_data->buffer_used != 0) {
+        crypto_stream_aes128ctr_xor(cb_data->buffer, cb_data->buffer, cb_data->buffer_used, cb_data->counter, cb_data->key);
+        write(cb_data->fd, cb_data->buffer, cb_data->buffer_used);
+        cb_data->buffer_used = 0;
     }
 
     if (lseek(cb_data->fd, 0, SEEK_CUR) == 0) {
@@ -405,28 +433,21 @@ MediaResp open_index(struct MediaDir* index) {
     void* json = NULL;
     size_t json_size = 0;
     MediaResp r = download_root(&json, &json_size);
-    if (r != MEDIA_OK) {
+    if (r != MEDIA_OK || json == NULL) {
         if (json != NULL) {
             free(json);
         }
         return r;
     }
     index->is_open = false;
-
-    r = parse_json_index(json, json_size, index);
-    if (r != MEDIA_OK) {
-        if (json != NULL) {
-            free(json);
-        }
-        return r;
-    }
-
     index->parent = NULL;
     index->perm = 0xffffffffffffffff;
     index->remote_name = NULL;
     index->name = NULL;
+
+    r = parse_json_index(json, json_size, index);
     free(json);
-    return MEDIA_OK;
+    return r;
 }
 
 MediaResp open_dir(struct MediaDir* dir) {

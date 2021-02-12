@@ -9,5 +9,10 @@
         "outdir": "./guest",
         "type": "txt",
         "guest": null
+    }, {
+        "name": "big_random_file",
+        "outdir": "./guest",
+        "type": "bin",
+        "guest": null
     }
 ]
