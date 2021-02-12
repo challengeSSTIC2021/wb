@@ -3,15 +3,14 @@
 import camellia
 import datetime
 from enum import IntEnum, unique
-from key_decode import VM_decode, VM_EXPIRE
+from hashlib import sha256
+import json
+import os
 import multiprocessing as mp
 import socket
 import struct
 import time
 import traceback
-
-Port = 65430
-Host = "0.0.0.0"
 
 @unique
 class ReqType(IntEnum):
@@ -30,7 +29,20 @@ class RespType(IntEnum):
     REQUEST_ERROR = 0xfe
     UNEXPECTED_ERROR = 0xff
 
-def reqCheck(sock, address, m):
+def VM_decode(payload, master_key):
+    if type(payload) != bytes or len(payload) != 20:
+        return None
+
+    cipher = payload[:16]
+    ident = payload[16:]
+
+    key = sha256(master_key + ident).digest()[:16]
+
+    c1 = camellia.CamelliaCipher(key=key, mode=camellia.MODE_ECB)
+    return c1.decrypt(cipher)
+
+
+def reqCheck(sock, address, m, ctx):
     if len(m) < 21:
         print("reqCheck REQUEST_ERROR")
         sock.send(bytes([RespType.REQUEST_ERROR.value]))
@@ -40,12 +52,12 @@ def reqCheck(sock, address, m):
     ts = struct.unpack('<I', payload[16:])[0]
     current_ts = int(datetime.datetime.now().timestamp())
 
-    plain = VM_decode(payload)
+    plain = VM_decode(payload, ctx["master-key"])
 
     if plain == None:
         print("reqCheck UNEXPECTED_ERROR")
         sock.send(bytes([RespType.UNEXPECTED_ERROR.value]))
-    elif ts + VM_EXPIRE > current_ts:
+    elif ts + ctx["timeout"] > current_ts:
         print("reqCheck CHECK_OK")
         sock.send(bytes([RespType.CHECK_OK.value]) + plain)
     else:
@@ -53,8 +65,46 @@ def reqCheck(sock, address, m):
         sock.send(bytes([RespType.CHECK_EXPIRED.value]) + plain)
     return
 
+def reqGetKey(sock, address, m, ctx):
+    if len(m) < 21:
+        print("reqGetKey REQUEST_ERROR")
+        sock.send(bytes([RespType.REQUEST_ERROR.value]))
+        return
 
-def process_main(sock, address):
+    payload = m[1:21]
+    ts = struct.unpack('<I', payload[16:])[0]
+    current_ts = int(datetime.datetime.now().timestamp())
+
+    # whitebox expired
+    if ts + ctx["timeout"] <= current_ts:
+        print("reqGetKey GETKEY_EXPIRED")
+        sock.send(bytes([RespType.GETKEY_EXPIRED.value]))
+        return
+
+    plain = VM_decode(payload, ctx["master-key"])
+    if plain == None or len(plain) != 16:
+        print("reqGetKey UNEXPECTED_ERROR")
+        sock.send(bytes([RespType.UNEXPECTED_ERROR.value]))
+        return
+
+    ident, perm = struct.unpack('<QQ', plain)
+
+    if ident not in ctx["keys"]:
+        print("reqGetKey GETKEY_UNKNOW")
+        sock.send(bytes([RespType.GETKEY_UNKNOW.value]))
+        return
+
+    if ctx["keys"][ident]["perms"] < perm:
+        print("reqGetKey GETKEY_INVALID_PERMS")
+        sock.send(bytes([RespType.GETKEY_INVALID_PERMS.value]))
+        return
+
+    print("reqGetKey GETKEY_OK {} with perm {}".format(ident, perm))
+    sock.send(bytes([RespType.GETKEY_OK.value]) + bytes.fromhex(ctx["keys"][ident]["key"]) + bytes.fromhex(ctx["keys"][ident]["counter"]))
+
+    return
+
+def process_main(sock, address, ctx):
     m = sock.recv(512)
     if len(m) < 1:
         sock.send(bytes([RespType.REQUEST_ERROR.value]))
@@ -71,21 +121,21 @@ def process_main(sock, address):
         return
 
     if reqType == ReqType.CHECK:
-        reqCheck(sock, address, m)
-    #elif reqType == ReqType.GETKEY:
-    #    pass
+        reqCheck(sock, address, m, ctx)
+    elif reqType == ReqType.GETKEY:
+        reqGetKey(sock, address, m, ctx)
     else:
         print("process_main REQUEST_ERROR no handler for reqType {}".format(reqType))
         sock.send(bytes([RespType.REQUEST_ERROR.value]))
     sock.close()
 
-def worker(sock):
+def worker(sock, ctx):
     cont = True
     while cont:
         client = None
         try:
             client, address = sock.accept()
-            process_main(client, address)
+            process_main(client, address, ctx)
         except KeyboardInterrupt:
             cont = False
         except Exception as e:
@@ -94,14 +144,48 @@ def worker(sock):
             client.close()
 
 def main():
-    n_worker = 1
+    import argparse
+    parser = argparse.ArgumentParser()
+
+    class hexArg:
+
+        def __call__(self, raw):
+            try:
+                b = bytes.fromhex(raw)
+            except ValueError:
+                raise argparse.ArgumentTypeError('Not an hexa value')
+
+            return b
+
+    parser.add_argument("-K", "--master-key", type=hexArg(), help="whitebox master key", required=True)
+    parser.add_argument("-t", "--timeout", type=int, help="whitebox expired", required=True)
+    parser.add_argument("-k", "--key-file", type=str, help="key files", default="keys.json")
+    parser.add_argument("-w", "--workers", type=int, help="worker", default=16)
+    parser.add_argument("-l", "--listen-port", type=int, help="listening port", default=65430)
+
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.key_file):
+        parser.error('Cannot found {}'.format(args.key_file))
+
+    with open(args.key_file, 'r') as f:
+        jkeys = json.loads(f.read())
+    keys = {}
+    for j in jkeys:
+        keys[j['ident']] = j
+
+    context = {
+        "keys": keys,
+        "master-key": args.master_key,
+        "timeout": args.timeout
+    }
 
     sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((Host, Port))
-    sock.listen(8 * n_worker)
+    sock.bind(("0.0.0.0", args.listen_port))
+    sock.listen(8 * args.workers)
 
-    workers = [mp.Process(target=worker, args=(sock,), daemon=True) for i in range(n_worker)]
+    workers = [mp.Process(target=worker, args=(sock, context), daemon=True) for i in range(args.workers)]
 
     for w in workers:
         w.start()
@@ -110,7 +194,7 @@ def main():
         for i in range(len(workers)):
             workers[i].join(0.001)
             if workers[i].exitcode != None:
-                workers[i] = mp.Process(target=worker, args=(sock,), daemon=True)
+                workers[i] = mp.Process(target=worker, args=(sock, context), daemon=True)
                 workers[i].start()
         time.sleep(1)
 

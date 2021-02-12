@@ -1,0 +1,13 @@
+[
+    {
+        "name": "user_file.txt",
+        "outdir": "./user0",
+        "type": "txt",
+        "perms": 1
+    }, {
+        "name": "guest_file.txt",
+        "outdir": "./guest",
+        "type": "txt",
+        "guest": null
+    }
+]
