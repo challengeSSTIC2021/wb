@@ -20,7 +20,7 @@ def build(suffix, mkey, outdir):
 
     with tempfile.TemporaryDirectory() as builddir:
         subprocess.run(["cmake", SRC_DIR, "-G", "Ninja",
-            "-DWB_SUFFIX={}".format(suffix.hex()),
+            "-DWB_SUFFIX={}".format(struct.pack('>Q', *struct.unpack('<Q', suffix)).hex()),
             "-DWB_KEY={}".format(key.hex()),
             "-DWB_ID={}".format(ident.hex()),
             "-DWB_AESENC_KEY={}".format(secrets.token_hex(16))],

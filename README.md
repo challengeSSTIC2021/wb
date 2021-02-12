@@ -89,7 +89,47 @@ en clair. Cela permet de limiter l'analyse de la table si la lib n'est pas charg
 Un docker compose contient une image de compilation et une image nginx qui propose la dernière lib compilé.
 
 Les arguments (clef, suffixe) sont à placer dans le docker-compose.yml
-- La clef sera une clef maître. à chaque compilation, les 4 derniers octets de la clef sont xoré avec le timestamp.
-- Le suffix est séparé en deux parties:
-    - les 4 permiers octets correspondent au timestamp de la whitebox (qui sert d'identifiant)
-    - les 4 octets suivants doivent être passé en paramêtre de l'image de compilation.
+- La clef sera une clef maître. à chaque compilation, les 16 permiers octets du hash entre la clef et le timestamp sont utilisé en clef.
+- Le suffix qui est fixé dans la whitebox
+
+## Setup
+
+### Editer et Lancer le docker-compose
+
+Dans le fichier docker-compose.yml, changer la clef et le suffix de la whitebox.
+Changer également le point de montage sur l'host du volumes web:/var/www/files afin de pouvoir ajouter des fichiers par la suite
+
+Lancer l'exécution avec ``docker-compose up -d``
+
+### Chiffrement des fichiers et génération de l'index
+
+Préparer les fichiers à mettre sur le serveur dans un dossier. Décriver la disposition dans un fichier json tels que:
+
+```json
+[
+    {
+        "name": "user_file.txt",        # chemin du fichier vis à vis du dossier d'entrée
+        "outdir": "./user0",            # dossier où mettre le fichier (ici le fichier aura le chemin ./user0/user_file.txt)
+        "type": "txt",
+        "perms": 1                      # permission nécessaire pour accéder au fichier. (suffix <= perms pour accéder au fichier)
+    }, {
+        "name": "guest_file.txt",
+        "outdir": "./guest",
+        "type": "txt",
+        "guest": null                   # fichier accéssible sans authentification (équivalent à perms = 0xffffffffffffffff)
+    }
+]
+```
+
+Utiliser le script key-server/files-cipher.py pour chiffrer les fichiers, créer un index (partiellement chiffré) et un json avec les clefs.
+Mettre les fichiers chiffrés et l'index sur le volume web:/var/www/files (cf docker-compose). /!\ ne pas mettre le json de clefs dans ce dossier.
+
+### Lancer le key-server
+
+lancer le script key-server/server.py avec le fichier de clefs, la clef maître de la wb ainsi que le timeout de la whitebox.
+
+### Compiler le client
+
+Compiler le client après avoir ajouter les endpoints dans le header config.h
+
+
