@@ -6,6 +6,8 @@
 // WHITEBOX GEN API
 #define AUTH_API BASE_URL "api/auth.so"
 #define GUEST_API BASE_URL "api/guest.so"
+#define FILES_API BASE_URL "files/"
+#define INDEX_JSON "index.json"
 
 // WHITEBOX RELOAD TIMER
 #define TIMEOUT_VM 1000

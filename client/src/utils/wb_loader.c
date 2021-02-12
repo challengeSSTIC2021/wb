@@ -140,7 +140,7 @@ static VMError open_state() {
         VMError res = open_state_internal();
         if (res == VM_OK) {
             struct vmsign s = {0};
-            char out[16] = {0};
+            unsigned char out[16] = {0};
             res = hsign_raw(0, &s);
             if (res == VM_OK) {
                 uint64_t suffix = get_current_permission();
@@ -154,7 +154,8 @@ static VMError open_state() {
                 fprintf(stderr, "[%d] hsign_raw return %d\n", i, res);
             }
         } else {
-            fprintf(stderr, "[%d] open_state_internal return %d\n", i, res);
+            close_state();
+            return res;
         }
         close_state();
         if (i == retry - 1) {
@@ -165,7 +166,7 @@ static VMError open_state() {
     return VM_INTERNAL_ERROR;
 }
 
-static int reopen_state() {
+static inline int reopen_state() {
     if (internal_state.libhandle != NULL) {
         close_state();
     }
@@ -174,7 +175,17 @@ static int reopen_state() {
 
 VMError remote_login(const char* username, const char* password) {
     if (username == NULL || password == NULL) {
-        return remote_logout();
+        if (internal_state.currentlogin != NULL || internal_state.currentpassword != NULL) {
+            close_state();
+            if (internal_state.currentlogin != NULL) free(internal_state.currentlogin);
+            if (internal_state.currentpassword != NULL) free(internal_state.currentpassword);
+            internal_state.currentlogin = NULL;
+            internal_state.currentpassword = NULL;
+        }
+        if (internal_state.libhandle == NULL) {
+            return open_state();
+        }
+        return VM_OK;
     }
     if (internal_state.libhandle != NULL) {
         if (internal_state.currentlogin != NULL || internal_state.currentpassword != NULL) {
@@ -202,6 +213,10 @@ VMError remote_logout() {
         internal_state.currentpassword = NULL;
     }
     return VM_OK;
+}
+
+VMError relogin() {
+    return reopen_state();
 }
 
 uint64_t get_current_permission() {

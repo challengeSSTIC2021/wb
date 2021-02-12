@@ -101,7 +101,7 @@ static KeyResp send_recv(const char* in, size_t in_size, char* out, size_t *out_
     return out[0];
 }
 
-KeyResp check_hsign(struct vmsign* payload, char* plain) {
+KeyResp check_hsign(struct vmsign* payload, unsigned char* plain) {
     char in_msg[1 + sizeof(struct vmsign)];
     char out_msg[17];
     size_t out_msg_size = sizeof(out_msg);
@@ -116,9 +116,33 @@ KeyResp check_hsign(struct vmsign* payload, char* plain) {
         return r;
     } else if (r >= RESP_ERROR_CODE) {
         fprintf(stderr, "send_recv return %u\n", r);
-        return RESP_INTERNAL_ERROR;
+        return r;
     } else {
         fprintf(stderr, "send_recv return %u\n", r);
         return RESP_INTERNAL_ERROR;
     }
 }
+
+KeyResp getkey(struct vmsign* payload, unsigned char* key, unsigned char* counter) {
+    char in_msg[1 + sizeof(struct vmsign)] = {0};
+    char out_msg[1 + 16 + 16] = {0};
+    size_t out_msg_size = sizeof(out_msg);
+
+    in_msg[0] = REQ_GETKEY;
+    memcpy(&in_msg[1], payload->data, sizeof(payload->data));
+    memcpy(&in_msg[1 + sizeof(payload->data)], payload->ident, sizeof(payload->ident));
+
+    KeyResp r = send_recv(in_msg, sizeof(in_msg), out_msg, &out_msg_size);
+    if (r == RESP_GETKEY_OK && out_msg_size == sizeof(out_msg)) {
+        memcpy(key, &out_msg[1], 16);
+        memcpy(counter, &out_msg[17], 16);
+        return r;
+    } else if (r == RESP_GETKEY_EXPIRED || r == RESP_GETKEY_INVALID_PERMS || r == RESP_GETKEY_UNKNOW || r >= RESP_ERROR_CODE) {
+        fprintf(stderr, "send_recv return %u\n", r);
+        return r;
+    } else {
+        fprintf(stderr, "send_recv return %u\n", r);
+        return RESP_INTERNAL_ERROR;
+    }
+}
+

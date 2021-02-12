@@ -13,6 +13,7 @@ typedef enum {
 
 VMError remote_login(const char* username, const char* password);
 VMError remote_logout();
+VMError relogin();
 
 uint64_t get_current_permission();
 

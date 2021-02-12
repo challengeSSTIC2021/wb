@@ -22,8 +22,7 @@ typedef enum {
     RESP_INTERNAL_ERROR = 0xffffffff,
 } KeyResp;
 
-KeyResp check_hsign(struct vmsign* payload, char* plain);
-
+KeyResp check_hsign(struct vmsign* payload, unsigned char* plain);
+KeyResp getkey(struct vmsign* payload, unsigned char* key, unsigned char* counter);
 
 #endif
-
