@@ -123,7 +123,7 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
         return MEDIA_UNEXPECTED_ERROR;
     }
 
-    stream_t* stream = vlc_stream_NewURL(ctx->vlc_sd, url);
+    stream_t* stream = vlc_stream_NewURL(ctx->vlc_obj, url);
 
     const size_t block_size = 65536;
     unsigned char buffer[block_size] = {0};

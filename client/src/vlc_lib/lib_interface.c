@@ -8,8 +8,8 @@
 #endif
 
 #define MODULE_STRING "chall"
-#define N_(x) (x)
 #include <vlc_common.h>
+#include <vlc_atomic.h>
 #include <vlc_threads.h>
 #include <vlc_plugin.h>
 #include <vlc_access.h>
@@ -23,13 +23,75 @@
 
 #define PREFIX_SERVICE "chall"
 
-static void error_VM(VMError r, services_discovery_t *p_sd) {
+#define DOMAIN  PREFIX_SERVICE "-plugin"
+#define _(str)  dgettext(DOMAIN, str)
+#define N_(str) (str)
+
+static atomic_flag need_init = ATOMIC_FLAG_INIT;
+static bool is_init = false;
+
+struct {
+    struct Context ctx;
+    struct MediaDir root_index;
+
+    vlc_mutex_t ctx_mutex;
+} global_ctx;
+
+static void global_init() {
+    if (is_init) {
+        return;
+    }
+    if (atomic_flag_test_and_set(&need_init)) {
+        do {
+            usleep(100);
+            __sync_synchronize();
+        } while (! is_init);
+        return;
+    }
+    vlc_mutex_init(&global_ctx.ctx_mutex);
+    initContext(&global_ctx.ctx, NULL, NULL, NULL);
+    memset(&global_ctx.root_index, '\0', sizeof(struct MediaDir));
+    global_ctx.root_index.is_open = false;
+
+    is_init = true;
+}
+
+static void get_context(vlc_object_t* vlc_obj) {
+    vlc_mutex_lock(&global_ctx.ctx_mutex);
+    global_ctx.ctx.vlc_obj = vlc_obj;
+}
+
+static void release_context() {
+    vlc_mutex_unlock(&global_ctx.ctx_mutex);
+}
+
+static void error_VM(VMError r, stream_t *p_access) {
     if (r == VM_AUTH_FAIL) {
-        msg_Err( p_sd, "Authentification fail" );
-        vlc_dialog_display_error( p_sd, "Server authentification failed", "Wrong login/password" );
+        msg_Err( p_access, "Authentification fail" );
+        vlc_dialog_display_error( p_access, "Server authentification failed", "Wrong login/password" );
     } else {
-        msg_Err( p_sd, "Unexpected error when loaded library: %d", r);
-        vlc_dialog_display_error( p_sd, "Unknown error", "Unexpected error: %d", r);
+        msg_Err( p_access, "Unexpected error when loaded library: %d", r);
+        vlc_dialog_display_error( p_access, "Unknown error", "Unexpected error: %d", r);
+    }
+}
+static void error_Media(MediaResp r, stream_t *p_access, const char* path) {
+    switch (r) {
+        case MEDIA_EMPTY:
+            msg_Err( p_access, "Empty file: %s", path);
+            vlc_dialog_display_error( p_access, "Empty file", "Empty file: %s", path);
+            break;
+        case MEDIA_PATH_INVALID:
+            msg_Err( p_access, "Path invalid: %s", path);
+            vlc_dialog_display_error( p_access, "Path invalid", "Path invalid: %s", path);
+            break;
+        case MEDIA_WRONG_PERMS:
+            msg_Err( p_access, "Permission denied: %s", path);
+            vlc_dialog_display_error( p_access, "Permission denied", "Permission denied: %s", path);
+            break;
+        default:
+            msg_Err( p_access, "Unexpected error when loaded '%s': %d", path, r);
+            vlc_dialog_display_error( p_access, "Unknown error", "Unexpected error when loaded '%s': %d", path, r);
+            break;
     }
 }
 
@@ -38,34 +100,49 @@ static void CloseSD( vlc_object_t* sd_this);
 static void *RunSD(void* data);
 static int OpenAccess( vlc_object_t* sd_this);
 static void CloseAccess( vlc_object_t* sd_this);
+static void *DownloadAccess(void* data);
+
+static int AccessSeek(stream_t *p_access, uint64_t pos);
+static int AccessControl(stream_t *p_access, int query, va_list args);
+static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size);
+static int AccessReadDir(stream_t *p_access, input_item_node_t* item);
 
 struct services_discovery_sys_t {
     services_discovery_t* parent;
-    vlc_array_t items;
     vlc_thread_t thread;
-    struct Context ctx;
-    struct MediaDir root_index;
 };
 
 struct access_sys_t {
+    stream_t* parent;
+    bool is_dir;
+    MediaResp r;
+
+    // directory
+    struct MediaDir* dir;
+
+    // file
+    struct MediaFile* file;
     int fd;
+    unsigned char key[16];
+    unsigned char counter[16];
+    vlc_mutex_t ctx_mutex;
+    vlc_thread_t thread;
+    struct Context tctx;
 };
 
-
-VLC_SD_PROBE_HELPER(PREFIX_SERVICE, N_("Chall media services"), SD_CAT_INTERNET)
+static int vlc_sd_probe_Open (vlc_object_t *obj) {
+    vlc_sd_probe_Add ((struct vlc_probe_t *)obj, PREFIX_SERVICE, N_("Chall media services"), SD_CAT_MYCOMPUTER);
+    return VLC_PROBE_CONTINUE;
+}
 
 vlc_module_begin()
-    set_shortname( "Chall" )
-    set_description( N_("Chall media services") )
     set_category( CAT_PLAYLIST )
     set_subcategory( SUBCAT_PLAYLIST_SD )
-    set_capability( "services_discovery", 0 )
+    set_shortname( N_("Chall") )
+    set_description( N_("Chall media services") )
     set_callbacks( OpenSD, CloseSD )
-    add_string("media-server", DEFAULT_BASE_URL, "media server URL", "Change the media server to retrived the media", false)
-    add_string("key-server-addr", DEFAULT_KEYSERVER_ADDRESS, "key server address", "Change the key server address", false)
-    add_integer_with_range("key-server-port", DEFAULT_KEYSERVER_PORT, 1, 65535, "media server port", "Change the key server port", false)
-    add_string("media-server-login", NULL, "Login", "Login", false)
-    add_password("media-server-pass", NULL, "Password", "Password", false)
+    set_capability( "services_discovery", 0 )
+    add_shortcut( PREFIX_SERVICE )
 
     add_submodule()
         set_category( CAT_INPUT )
@@ -73,7 +150,11 @@ vlc_module_begin()
         set_callbacks( OpenAccess, CloseAccess )
         set_capability( "access", 0 )
         add_shortcut( PREFIX_SERVICE )
-        add_string("chall-path", "", "", "", true)
+        add_string("media-server", DEFAULT_BASE_URL, "media server URL", "Change the media server to retrived the media", false)
+        add_string("key-server-addr", DEFAULT_KEYSERVER_ADDRESS, "key server address", "Change the key server address", false)
+        add_integer_with_range("key-server-port", DEFAULT_KEYSERVER_PORT, 1, 65535, "media server port", "Change the key server port", false)
+        add_string("media-server-login", NULL, "Login", "Login", false)
+        add_password("media-server-pass", NULL, "Password", "Password", false)
 
 
     VLC_SD_PROBE_SUBMODULE
@@ -89,56 +170,15 @@ static int OpenSD( vlc_object_t* sd_this) {
     if (p_sys == NULL) {
         return VLC_ENOMEM;
     }
-    memset(p_sys, '\0', sizeof(struct services_discovery_sys_t));
-    p_sys->root_index.is_open = false;
     p_sys->parent = p_sd;
 
     p_sd->p_sys = p_sys;
-    p_sd->description = "chall media server";
+    p_sd->description = vlc_gettext(N_("Chall media server"));
 
-    vlc_array_init(&p_sys->items);
+    global_init();
 
-    int key_server_port = var_CreateGetInteger(p_sd, "key-server-port");
-    char* key_server_port_str;
-    if (asprintf(&key_server_port_str, "%d", key_server_port) == -1) {
-        vlc_array_clear(&p_sys->items);
-        free(p_sys);
-        return VLC_ENOMEM;
-    }
-    char* m_server = var_CreateGetString(p_sd, "media-server");
-    char* key_server_addr = var_CreateGetString(p_sd, "key-server-addr");
-    initContext(&p_sys->ctx, m_server, key_server_addr, key_server_port_str);
-    free(key_server_addr);
-    free(key_server_port_str);
-    free(m_server);
-
-    p_sys->ctx.vlc_sd = sd_this;
-
-    char* login = var_CreateGetString(p_sd, "media-server-login");
-    char* password = var_CreateGetString(p_sd, "media-server-pass");
-    VMError r;
-    if (login == NULL || password == NULL || *login == '\0' || *password == '\0') {
-        msg_Info(p_sd, "Log as guest");
-        r = remote_login(&p_sys->ctx, NULL, NULL);
-    } else {
-        msg_Info(p_sd, "Log as %s", login);
-        r = remote_login(&p_sys->ctx, login, password);
-    }
-    free(login);
-    free(password);
-
-    if (r != VM_OK) {
-        error_VM(r, p_sd);
-        vlc_array_clear(&p_sys->items);
-        freeContext(&p_sys->ctx);
-        free(p_sys);
-        return VLC_EGENERIC;
-    }
 
     if ( vlc_clone( &p_sys->thread, RunSD, p_sys, VLC_THREAD_PRIORITY_LOW)) {
-        vlc_array_clear(&p_sys->items);
-        close_index(&p_sys->root_index);
-        freeContext(&p_sys->ctx);
         free(p_sys);
         return VLC_EGENERIC;
     }
@@ -152,73 +192,41 @@ static void CloseSD( vlc_object_t* sd_this) {
     services_discovery_sys_t *p_sys = p_sd->p_sys;
     vlc_join( p_sys->thread, NULL );
 
-    for (int i = 0; i < vlc_array_count(&p_sys->items); i++) {
-        input_item_t* item = (input_item_t*) vlc_array_item_at_index(&p_sys->items, i);
-        services_discovery_RemoveItem(p_sd, item);
-        input_item_Release(item);
-    }
-
-    vlc_array_clear(&p_sys->items);
-    close_index(&p_sys->root_index);
-    freeContext(&p_sys->ctx);
     free(p_sys);
     p_sd->p_sys = NULL;
 }
 
-static inline void RegisteredFile(services_discovery_sys_t *p_sys, struct MediaFile* f) {
-    uint64_t perm = get_current_permission(&p_sys->ctx);
-    if (perm > f->perm) {
-        return;
-    }
-    char* path = NULL;
-    MediaResp r = get_file_path(f, &path);
-    if (r != MEDIA_OK) {
-        return;
-    }
+static void add_subnode(const vlc_event_t *p_event, void *data) {
+    services_discovery_sys_t *p_sys = (services_discovery_sys_t*) data;
 
-    input_item_t* item = input_item_NewFile(PREFIX_SERVICE "://", path, -1, ITEM_NET);
-    if (item == NULL) {
-        free(path);
-        return;
-    }
-    free(path);
+    input_item_node_t *root = p_event->u.input_item_subitem_tree_added.p_root;
 
-    vlc_array_append_or_abort(&p_sys->items, item);
-    services_discovery_AddItem(p_sys->parent, item);
-}
-
-static inline void RegisteredDir(services_discovery_sys_t *p_sys, struct MediaDir* d) {
-    if (!d->is_open) {
-        MediaResp r = open_dir(&p_sys->ctx, d);
-        if (r != MEDIA_OK) {
-            return;
-        }
-    }
-
-    for (size_t i = 0; i< d->nb_file; i++) {
-        RegisteredFile(p_sys, &d->files[i]);
-    }
-
-    for (size_t i = 0; i< d->nb_subdir; i++) {
-        RegisteredDir(p_sys, &d->subdir[i]);
+    for(int i = 0; i < root->i_children; i++) {
+        services_discovery_AddItem(p_sys->parent, root->pp_children[i]->p_item);
     }
 }
 
 static void *RunSD(void* data) {
 
     services_discovery_sys_t *p_sys = (services_discovery_sys_t*) data;
-    MediaResp r = open_index(&p_sys->ctx, &p_sys->root_index);
 
-    if (r != MEDIA_OK) {
-        msg_Err( p_sys->parent, "Unexpected error when load index: %d", r);
-        vlc_dialog_display_error( p_sys->parent, "Unknown error when load index", "MediaResp %d", r);
+    input_item_t* root = input_item_NewDirectory(PREFIX_SERVICE ":///", NULL, ITEM_NET);
+    if (root == NULL) {
         return NULL;
     }
-    RegisteredDir(p_sys, &p_sys->root_index);
+    input_item_AddOption(root, "recursive=collapse", VLC_INPUT_OPTION_TRUSTED|VLC_INPUT_OPTION_UNIQUE);
+
+    vlc_event_manager_t *em = &root->event_manager;
+    vlc_event_attach(em, vlc_InputItemSubItemTreeAdded, add_subnode, data);
+
+    input_Read(p_sys->parent, root);
+
+    vlc_event_detach(em, vlc_InputItemSubItemTreeAdded, add_subnode, data);
+
+    input_item_Release(root);
 
     return NULL;
 }
-
 
 static int OpenAccess( vlc_object_t* access_this) {
 
@@ -230,10 +238,111 @@ static int OpenAccess( vlc_object_t* access_this) {
     }
     p_access->p_sys = p_sys;
 
+    p_sys->parent = p_access;
     p_sys->fd = -1;
+    global_init();
+
+    int key_server_port = var_CreateGetInteger(p_access, "key-server-port");
+    char* key_server_port_str;
+    if (asprintf(&key_server_port_str, "%d", key_server_port) == -1) {
+        free(p_sys);
+        return VLC_ENOMEM;
+    }
+    char* m_server = var_CreateGetString(p_access, "media-server");
+    char* key_server_addr = var_CreateGetString(p_access, "key-server-addr");
+
+    get_context(access_this);
+
+    setContext(&global_ctx.ctx, m_server, key_server_addr, key_server_port_str);
+    free(key_server_addr);
+    free(key_server_port_str);
+    free(m_server);
+
+    char* login = var_CreateGetString(p_access, "media-server-login");
+    char* password = var_CreateGetString(p_access, "media-server-pass");
+    VMError r;
+    if (login == NULL || password == NULL || *login == '\0' || *password == '\0') {
+        msg_Info(p_access, "Log as guest");
+        r = remote_login(&global_ctx.ctx, NULL, NULL);
+    } else {
+        msg_Info(p_access, "Log as %s", login);
+        r = remote_login(&global_ctx.ctx, login, password);
+    }
+    free(login);
+    free(password);
+
+    if (r != VM_OK) {
+        error_VM(r, p_access);
+        release_context();
+        free(p_sys);
+        return VLC_EGENERIC;
+    }
 
     msg_Info(p_access, "Success load library");
 
+    if (!global_ctx.root_index.is_open) {
+        MediaResp mr = open_index(&global_ctx.ctx, &global_ctx.root_index);
+        if (mr != MEDIA_OK) {
+            release_context();
+            msg_Err(p_access, "Fail to load index: %d", mr);
+            vlc_dialog_display_error(p_access, "Server authentification failed", "Fail to load server index: %d", mr);
+            free(p_sys);
+            return VLC_EGENERIC;
+        }
+    }
+
+
+    p_sys->dir = NULL;
+    p_sys->file = NULL;
+    MediaResp mr;
+    if (p_access->psz_location[0] == '\0' || p_access->psz_location[strlen(p_access->psz_location) - 1] == '/') {
+        p_sys->is_dir = true;
+        mr = get_dir(&global_ctx.ctx, &global_ctx.root_index, p_access->psz_location, &p_sys->dir);
+    } else {
+        p_sys->is_dir = false;
+        // try to find a file
+        mr = get_file(&global_ctx.ctx, &global_ctx.root_index, p_access->psz_location, &p_sys->file);
+        if (mr == MEDIA_PATH_INVALID) {
+            p_sys->is_dir = true;
+            mr = get_dir(&global_ctx.ctx, &global_ctx.root_index, p_access->psz_location, &p_sys->dir);
+        }
+    }
+    if (mr != MEDIA_OK) {
+        release_context();
+        error_Media(mr, p_access, (p_access->psz_url != NULL) ? p_access->psz_url : p_access->psz_location);
+        free(p_sys);
+        return VLC_EGENERIC;
+    }
+    if (!p_sys->is_dir) {
+        mr = get_file_key(&global_ctx.ctx, p_sys->file->ident, p_sys->key, p_sys->counter);
+        if (mr != MEDIA_OK) {
+            release_context();
+            error_Media(mr, p_access, (p_access->psz_url != NULL) ? p_access->psz_url : p_access->psz_location);
+            free(p_sys);
+            return VLC_EGENERIC;
+        }
+        initContext(&p_sys->tctx, global_ctx.ctx.base_addr, NULL, NULL);
+        p_sys->tctx.vlc_obj = access_this;
+
+        vlc_mutex_init(&p_sys->ctx_mutex);
+        vlc_mutex_lock(&p_sys->ctx_mutex);
+        release_context();
+
+        if ( vlc_clone( &p_sys->thread, DownloadAccess, p_sys, VLC_THREAD_PRIORITY_LOW)) {
+            freeContext(&p_sys->tctx);
+            vlc_mutex_unlock(&p_sys->ctx_mutex);
+            vlc_mutex_destroy(&p_sys->ctx_mutex);
+            free(p_sys);
+            return VLC_EGENERIC;
+        }
+        ACCESS_SET_CALLBACKS(AccessRead, NULL, AccessControl, AccessSeek);
+        p_access->pf_readdir = NULL;
+    } else {
+        release_context();
+        ACCESS_SET_CALLBACKS(NULL, NULL, NULL, NULL);
+        p_access->pf_readdir = AccessReadDir;
+        p_access->pf_control = access_vaDirectoryControlHelper;
+    }
 
     return VLC_SUCCESS;
 }
@@ -243,8 +352,14 @@ static void CloseAccess( vlc_object_t* access_this) {
     stream_t *p_access = ( stream_t* ) access_this;
     access_sys_t *p_sys = p_access->p_sys;
 
-    if (p_sys->fd > 0) {
-        close(p_sys->fd);
+    if (!p_sys->is_dir) {
+        vlc_join( p_sys->thread, NULL );
+
+        vlc_mutex_destroy(&p_sys->ctx_mutex);
+        if (p_sys->fd > 0) {
+            close(p_sys->fd);
+        }
+        freeContext(&p_sys->tctx);
     }
 
     free(p_access->p_sys);
@@ -252,3 +367,117 @@ static void CloseAccess( vlc_object_t* access_this) {
 }
 
 
+static void *DownloadAccess(void* data) {
+
+    access_sys_t *p_sys = (access_sys_t*) data;
+
+    p_sys->r = download_file_with_key(&p_sys->tctx, p_sys->file->remote_name, p_sys->key, p_sys->counter, &p_sys->fd);
+    if (p_sys->fd != -1) {
+        lseek(p_sys->fd, 0, SEEK_SET);
+    }
+    vlc_mutex_unlock(&p_sys->ctx_mutex);
+    return NULL;
+}
+
+static int AccessSeek(stream_t *p_access, uint64_t pos) {
+    access_sys_t *p_sys = p_access->p_sys;
+
+    vlc_mutex_lock(&p_sys->ctx_mutex);
+    if (p_sys->fd == -1) {
+        vlc_mutex_unlock(&p_sys->ctx_mutex);
+        return VLC_EGENERIC;
+    }
+
+    if (lseek(p_sys->fd, pos, SEEK_SET) != pos) {
+        vlc_mutex_unlock(&p_sys->ctx_mutex);
+        return VLC_EGENERIC;
+    }
+    vlc_mutex_unlock(&p_sys->ctx_mutex);
+    return VLC_SUCCESS;
+}
+
+static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
+    access_sys_t *p_sys = p_access->p_sys;
+
+    if (vlc_mutex_trylock(&p_sys->ctx_mutex) != 0) {
+        return -1;
+    }
+    if (p_sys->fd == -1) {
+        vlc_mutex_unlock(&p_sys->ctx_mutex);
+        return 0;
+    }
+
+    ssize_t read_len = read(p_sys->fd, buf, size);
+    vlc_mutex_unlock(&p_sys->ctx_mutex);
+    if (read_len < 0) {
+        return 0;
+    }
+    return read_len;
+}
+
+static int AccessControl(stream_t *p_access, int query, va_list args) {
+    switch (query) {
+        case STREAM_CAN_SEEK:
+        case STREAM_CAN_FASTSEEK:
+            *va_arg(args, bool *) = true;
+            break;
+        case STREAM_CAN_PAUSE:
+        case STREAM_CAN_CONTROL_PACE:
+            *va_arg(args, bool *) = false;
+            break;
+        case STREAM_GET_PTS_DELAY:
+            *va_arg(args, int64_t *) = INT64_C(1000) * var_InheritInteger(p_access, "network-caching");
+            break;
+        default:
+            return VLC_EGENERIC;
+    }
+    return VLC_SUCCESS;
+}
+
+static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
+    access_sys_t *p_sys = p_access->p_sys;
+
+    struct vlc_readdir_helper rdh;
+    vlc_readdir_helper_init(&rdh, p_access, item);
+
+    for (size_t i = 0; i< p_sys->dir->nb_file; i++) {
+        char* path = NULL;
+        MediaResp r = get_file_path(&p_sys->dir->files[i], &path);
+        if (r != MEDIA_OK) {
+            vlc_readdir_helper_finish(&rdh, false);
+            return VLC_ENOMEM;
+        }
+        char* full_path;
+        if (asprintf(&full_path, PREFIX_SERVICE "://%s", path) == -1) {
+            free(path);
+            vlc_readdir_helper_finish(&rdh, false);
+            return VLC_ENOMEM;
+        }
+
+        vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->files[i].name, ITEM_TYPE_FILE, ITEM_NET);
+        free(path);
+        free(full_path);
+    }
+
+    for (size_t i = 0; i< p_sys->dir->nb_subdir; i++) {
+        char* path = NULL;
+        MediaResp r = get_dir_path(&p_sys->dir->subdir[i], &path);
+        if (r != MEDIA_OK) {
+            vlc_readdir_helper_finish(&rdh, false);
+            return VLC_ENOMEM;
+        }
+        char* full_path;
+        if (asprintf(&full_path, PREFIX_SERVICE "://%s", path) == -1) {
+            free(path);
+            vlc_readdir_helper_finish(&rdh, false);
+            return VLC_ENOMEM;
+        }
+
+        vlc_readdir_helper_additem(&rdh, full_path, NULL, full_path /*p_sys->dir->subdir[i].name*/, ITEM_TYPE_DIRECTORY, ITEM_NET);
+        free(path);
+        free(full_path);
+    }
+
+    vlc_readdir_helper_finish(&rdh, true);
+    return VLC_SUCCESS;
+}

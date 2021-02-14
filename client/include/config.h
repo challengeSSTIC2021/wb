@@ -45,7 +45,7 @@ struct Context {
     int (*getIdent)(unsigned char*);
 
 #ifdef HTTP_WITH_VLC
-    vlc_object_t* vlc_sd;
+    vlc_object_t* vlc_obj;
 #endif
 };
 

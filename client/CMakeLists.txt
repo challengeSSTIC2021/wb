@@ -44,5 +44,5 @@ set_target_properties(vlc_module PROPERTIES OUTPUT_NAME chall_plugin)
 
 set_target_properties(client_tester PROPERTIES COMPILE_FLAGS "-fPIC -Wall -ffunction-sections -fdata-sections -fvisibility=hidden")
 set_target_properties(client_shell PROPERTIES COMPILE_FLAGS "-fPIC -Wall -ffunction-sections -fdata-sections -fvisibility=hidden")
-set_target_properties(vlc_module PROPERTIES COMPILE_FLAGS "-fPIC -Wall -ffunction-sections -fdata-sections -fvisibility=hidden -DHTTP_WITH_VLC -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE")
+set_target_properties(vlc_module PROPERTIES COMPILE_FLAGS "-fPIC -Wall -ffunction-sections -fdata-sections -fvisibility=hidden -DHTTP_WITH_VLC -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE -g -O2")
 

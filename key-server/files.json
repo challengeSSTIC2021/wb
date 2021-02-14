@@ -10,7 +10,7 @@
         "type": "txt",
         "guest": null
     }, {
-        "name": "big_random_file",
+        "name": "big_random_file.txt",
         "outdir": "./guest",
         "type": "bin",
         "guest": null

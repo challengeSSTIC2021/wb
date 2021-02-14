@@ -196,7 +196,7 @@ static inline VMError open_state_internal(struct Context* ctx) {
         return VM_INTERNAL_ERROR;
     }
 
-    stream_t* stream = vlc_stream_NewURL(ctx->vlc_sd, url);
+    stream_t* stream = vlc_stream_NewURL(ctx->vlc_obj, url);
     if (stream == NULL) {
         close(fd);
         free(url);
