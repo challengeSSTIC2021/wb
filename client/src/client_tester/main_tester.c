@@ -10,12 +10,14 @@
 int main(int argc, char** argv) {
 
     if (curl_global_init(CURL_GLOBAL_ALL) != 0) abort();
+    struct Context ctx;
+    initContext(&ctx, NULL, NULL, NULL);
 
     while (1) {
         struct vmsign t;
         memset(&t, 0, sizeof(struct vmsign));
-        VMError e = hsign(0, &t);
-        uint64_t perm = get_current_permission();
+        VMError e = hsign(&ctx, 0, &t);
+        uint64_t perm = get_current_permission(&ctx);
 
         printf("hsign return %d, m=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x, ident=%02x%02x%02x%02x, perm=%016lx\n",
             e,

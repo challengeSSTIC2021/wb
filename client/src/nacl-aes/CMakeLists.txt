@@ -10,3 +10,4 @@ set(AES_SOURCE
 )
 
 target_sources(client_shell PRIVATE ${AES_SOURCE})
+target_sources(vlc_module PRIVATE ${AES_SOURCE})

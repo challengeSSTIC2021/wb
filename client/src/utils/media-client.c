@@ -1,5 +1,12 @@
+#define _GNU_SOURCE
 
+#ifndef HTTP_WITH_VLC
 #include <curl/curl.h>
+#else
+#include <vlc_common.h>
+#include <vlc_access.h>
+#endif
+
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +29,13 @@ struct write_data {
     unsigned char key[16];
     unsigned char counter[16];
 
+#ifndef HTTP_WITH_VLC
     unsigned char buffer[16];
     size_t buffer_used;
+#endif
 };
+
+#ifndef HTTP_WITH_VLC
 
 static size_t decode_write_callback(char *ptr, size_t size, size_t nmemb, void *userdata) {
     struct write_data* cb_data = (struct write_data*) userdata;
@@ -56,16 +67,11 @@ static size_t decode_write_callback(char *ptr, size_t size, size_t nmemb, void *
     }
 }
 
-static inline MediaResp download_media(const char* name, struct write_data *cb_data) {
-    size_t url_len = strlen(FILES_API) + strlen(name) + 1;
-
-    char* url = malloc(url_len);
-    if (url == NULL) {
+static inline MediaResp download_media(struct Context* ctx, const char* name, struct write_data *cb_data) {
+    char* url;
+    if (asprintf(&url, "%s" FILES_API_SUF "%s", ctx->base_addr, name) == -1) {
         return MEDIA_UNEXPECTED_ERROR;
     }
-    strncpy(url, FILES_API, url_len);
-    strncpy(url + strlen(FILES_API), name, url_len - strlen(FILES_API));
-    url[url_len - 1] = 0;
 
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
@@ -109,6 +115,48 @@ curlError:
     return MEDIA_UNEXPECTED_ERROR;
 }
 
+#else
+
+static inline MediaResp download_media(struct Context* ctx, const char* name, struct write_data *cb_data) {
+    char* url;
+    if (asprintf(&url, "%s" FILES_API_SUF "%s", ctx->base_addr, name) == -1) {
+        return MEDIA_UNEXPECTED_ERROR;
+    }
+
+    stream_t* stream = vlc_stream_NewURL(ctx->vlc_sd, url);
+
+    const size_t block_size = 65536;
+    unsigned char buffer[block_size] = {0};
+    size_t recv_size;
+    bool stop = false;
+
+    do {
+        recv_size = vlc_stream_Read(stream, buffer, block_size);
+        if (recv_size != block_size) {
+            if (recv_size < 0 || !vlc_stream_Eof(stream)) {
+                vlc_stream_Delete(stream);
+                return MEDIA_UNEXPECTED_ERROR;
+            }
+            stop = true;
+        }
+        if (cb_data->decode) {
+            crypto_stream_aes128ctr_xor(buffer, buffer, recv_size, cb_data->counter, cb_data->key);
+            store32_bigendian(&cb_data->counter[12], (recv_size >> 4) + load32_bigendian(&cb_data->counter[12]));
+        }
+        write(cb_data->fd, buffer, recv_size);
+
+    } while (!stop);
+
+    vlc_stream_Delete(stream);
+
+    if (lseek(cb_data->fd, 0, SEEK_CUR) == 0) {
+        return MEDIA_EMPTY;
+    }
+
+    return MEDIA_OK;
+}
+#endif
+
 static inline int create_tmp_file() {
     char filepath[] = "/tmp/MediaTmp-XXXXXX";
     int fd = mkstemp(filepath);
@@ -136,7 +184,7 @@ static inline MediaResp allocate_tmp_file(int fd, void** out, size_t* size) {
     return MEDIA_OK;
 }
 
-static MediaResp download_root(void** out, size_t* size) {
+static MediaResp download_root(struct Context* ctx, void** out, size_t* size) {
     int fd = create_tmp_file();
     if (fd < 0) {
         return MEDIA_UNEXPECTED_ERROR;
@@ -144,7 +192,7 @@ static MediaResp download_root(void** out, size_t* size) {
     struct write_data cb_data = {0};
     cb_data.fd = fd;
     cb_data.decode = false;
-    MediaResp r = download_media(INDEX_JSON, &cb_data);
+    MediaResp r = download_media(ctx, INDEX_JSON, &cb_data);
     if (r != MEDIA_OK) {
         close(fd);
         return r;
@@ -154,16 +202,14 @@ static MediaResp download_root(void** out, size_t* size) {
     return r;
 }
 
-static MediaResp download_ident(const char* name, uint64_t ident, int* fd) {
+NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned char *key, unsigned char *counter) {
     int retry = 2;
     KeyResp rkey;
-    struct write_data cb_data = {0};
-    cb_data.decode = true;
 
     do {
         retry--;
         struct vmsign token;
-        VMError rvm = hsign(ident, &token);
+        VMError rvm = hsign(ctx, ident, &token);
         if (rvm != VM_OK) {
             if (rvm == VM_AUTH_FAIL) {
                 return MEDIA_VM_PERM_FAIL;
@@ -172,11 +218,11 @@ static MediaResp download_ident(const char* name, uint64_t ident, int* fd) {
             }
         }
 
-        rkey = getkey(&token, cb_data.key, cb_data.counter);
+        rkey = getkey(ctx, &token, key, counter);
         if (rkey != RESP_GETKEY_EXPIRED) {
             retry = -1;
         } else {
-            rvm = relogin();
+            rvm = relogin(ctx);
             if (rvm != VM_OK) {
                 if (rvm == VM_AUTH_FAIL) {
                     return MEDIA_VM_PERM_FAIL;
@@ -196,6 +242,14 @@ static MediaResp download_ident(const char* name, uint64_t ident, int* fd) {
             return MEDIA_UNEXPECTED_ERROR;
         }
     }
+    return MEDIA_OK;
+}
+
+NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remote_name, unsigned char *key, unsigned char *counter, int* fd) {
+    struct write_data cb_data = {0};
+    cb_data.decode = true;
+    memcpy(cb_data.key, key, 16);
+    memcpy(cb_data.counter, counter, 16);
 
     if (*fd < 1) {
         *fd = create_tmp_file();
@@ -204,22 +258,27 @@ static MediaResp download_ident(const char* name, uint64_t ident, int* fd) {
         }
         cb_data.fd = *fd;
 
-        MediaResp r = download_media(name, &cb_data);
+        MediaResp r = download_media(ctx, remote_name, &cb_data);
         if (r != MEDIA_OK) {
             close(*fd);
             *fd = -1;
-            return r;
         }
+        return r;
     } else {
         cb_data.fd = *fd;
-
-        MediaResp r = download_media(name, &cb_data);
-        if (r != MEDIA_OK) {
-            return r;
-        }
+        return download_media(ctx, remote_name, &cb_data);
     }
+}
 
-    return MEDIA_OK;
+static MediaResp download_ident(struct Context* ctx, const char* name, uint64_t ident, int* fd) {
+    unsigned char key[16] = {0};
+    unsigned char counter[16] = {0};
+
+    MediaResp r = get_file_key(ctx, ident, key, counter);
+    if (r != MEDIA_OK) {
+        return r;
+    }
+    return download_file_with_key(ctx, name, key, counter, fd);
 }
 
 static void erase_file(struct MediaFile* file) {
@@ -283,16 +342,16 @@ void close_index(struct MediaDir* index) {
     erase_dir(index);
 }
 
-MediaResp download_file(struct MediaFile* file, int* fd) {
-    if (file == NULL || fd == NULL) {
+MediaResp download_file(struct Context* ctx, struct MediaFile* file, int* fd) {
+    if (file == NULL || fd == NULL || ctx == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
-    uint64_t current_perm = get_current_permission();
+    uint64_t current_perm = get_current_permission(ctx);
     if (current_perm > file->perm) {
         return MEDIA_WRONG_PERMS;
     }
 
-    return download_ident(file->remote_name, file->ident, fd);
+    return download_ident(ctx, file->remote_name, file->ident, fd);
 }
 
 static inline bool is64bitsHexString(const char* v) {
@@ -425,14 +484,14 @@ json_error:
     return MEDIA_JSON_ERROR;
 }
 
-MediaResp open_index(struct MediaDir* index) {
-    if (index == NULL || index->name != NULL || index->remote_name != NULL || index->parent != NULL ||
+MediaResp open_index(struct Context* ctx, struct MediaDir* index) {
+    if (ctx == NULL || index == NULL || index->name != NULL || index->remote_name != NULL || index->parent != NULL ||
             index->subdir != NULL || index->files != NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
     void* json = NULL;
     size_t json_size = 0;
-    MediaResp r = download_root(&json, &json_size);
+    MediaResp r = download_root(ctx, &json, &json_size);
     if (r != MEDIA_OK || json == NULL) {
         if (json != NULL) {
             free(json);
@@ -450,8 +509,8 @@ MediaResp open_index(struct MediaDir* index) {
     return r;
 }
 
-MediaResp open_dir(struct MediaDir* dir) {
-    if (dir == NULL) {
+MediaResp open_dir(struct Context* ctx, struct MediaDir* dir) {
+    if (dir == NULL || ctx == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
     if (dir->is_open) {
@@ -461,13 +520,13 @@ MediaResp open_dir(struct MediaDir* dir) {
         return MEDIA_UNEXPECTED_ERROR;
     }
 
-    uint64_t current_perm = get_current_permission();
+    uint64_t current_perm = get_current_permission(ctx);
     if (current_perm > dir->perm) {
         return MEDIA_WRONG_PERMS;
     }
 
     int fd = 0;
-    MediaResp r = download_ident(dir->remote_name, dir->ident, &fd);
+    MediaResp r = download_ident(ctx, dir->remote_name, dir->ident, &fd);
     if (r != MEDIA_OK) {
         return r;
     }
@@ -490,7 +549,7 @@ MediaResp open_dir(struct MediaDir* dir) {
 }
 
 static inline MediaResp get_dir_path_(struct MediaDir* curdir, char** out, size_t l) {
-    if (curdir == NULL) {
+    if (curdir == NULL || out == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
     if (curdir->parent == NULL) {
@@ -522,6 +581,21 @@ static inline MediaResp get_dir_path_(struct MediaDir* curdir, char** out, size_
 
 MediaResp get_dir_path(struct MediaDir* curdir, char** out) {
     return get_dir_path_(curdir, out, 0);
+}
+
+MediaResp get_file_path(struct MediaFile* curfile, char** out) {
+    if (curfile == NULL) {
+        return MEDIA_UNEXPECTED_ERROR;
+    }
+    MediaResp r = get_dir_path_(curfile->parent, out, strlen(curfile->name));
+    if (r != MEDIA_OK) {
+        return r;
+    }
+    if (*out == NULL) {
+        return MEDIA_UNEXPECTED_ERROR;
+    }
+    strncat(*out, curfile->name, strlen(curfile->name));
+    return MEDIA_OK;
 }
 
 static inline char* alloc_next_path(const char *path, const char** out) {
@@ -639,8 +713,8 @@ static inline void free_path_parse(char** path) {
     free(path);
 }
 
-MediaResp get_dir(struct MediaDir* basedir, const char* path, struct MediaDir** outdir) {
-    if (path == NULL || basedir == NULL) {
+MediaResp get_dir(struct Context* ctx, struct MediaDir* basedir, const char* path, struct MediaDir** outdir) {
+    if (path == NULL || basedir == NULL || ctx == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
     char** path_list = path_parse(path);
@@ -657,7 +731,7 @@ MediaResp get_dir(struct MediaDir* basedir, const char* path, struct MediaDir** 
     }
 
     while (*cur_path != NULL) {
-        MediaResp r = open_dir(curdir);
+        MediaResp r = open_dir(ctx, curdir);
         if (r != MEDIA_OK) {
             free_path_parse(path_list);
             return r;
@@ -684,7 +758,7 @@ MediaResp get_dir(struct MediaDir* basedir, const char* path, struct MediaDir** 
         cur_path++;
     }
 
-    MediaResp r = open_dir(curdir);
+    MediaResp r = open_dir(ctx, curdir);
     if (r != MEDIA_OK) {
         free_path_parse(path_list);
         return r;
@@ -697,8 +771,8 @@ MediaResp get_dir(struct MediaDir* basedir, const char* path, struct MediaDir** 
     return MEDIA_OK;
 }
 
-MediaResp get_file(struct MediaDir* basedir, const char* path, struct MediaFile** outfile) {
-    if (path == NULL || basedir == NULL) {
+MediaResp get_file(struct Context* ctx, struct MediaDir* basedir, const char* path, struct MediaFile** outfile) {
+    if (path == NULL || basedir == NULL || ctx == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
     char** path_list = path_parse(path);
@@ -715,7 +789,7 @@ MediaResp get_file(struct MediaDir* basedir, const char* path, struct MediaFile*
     }
 
     while (*cur_path != NULL) {
-        MediaResp r = open_dir(curdir);
+        MediaResp r = open_dir(ctx, curdir);
         if (r != MEDIA_OK) {
             free_path_parse(path_list);
             return r;

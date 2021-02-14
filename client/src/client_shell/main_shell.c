@@ -32,7 +32,7 @@ struct Command {
     size_t nb_args;
 };
 
-static inline char* alloc_next_arg(bool *end_cmd, bool *end_input) {
+static  char* alloc_next_arg(bool *end_cmd, bool *end_input) {
     int current_size = 16;
     char* arg = malloc(16);
     int current_index = 0;
@@ -83,7 +83,7 @@ static inline char* alloc_next_arg(bool *end_cmd, bool *end_input) {
     return arg;
 }
 
-static inline void free_cmd(struct Command* cmd) {
+static  void free_cmd(struct Command* cmd) {
     if (cmd == NULL) {
         return;
     }
@@ -100,7 +100,7 @@ static inline void free_cmd(struct Command* cmd) {
     cmd->nb_args = 0;
 }
 
-static inline CmdType parse_cmd(struct Command* out, bool* end_input) {
+static  CmdType parse_cmd(struct Command* out, bool* end_input) {
     if (out == NULL) {
         return CMD_PARSE_ERROR;
     }
@@ -179,7 +179,7 @@ static void cmd_help() {
             "   reload                      Reload the index\n");
 }
 
-static void cmd_list(struct MediaDir* current_dir, const struct Command* cmd) {
+static void cmd_list(struct Context* ctx, struct MediaDir* current_dir, const struct Command* cmd) {
     if (current_dir == NULL) {
         return;
     }
@@ -187,10 +187,10 @@ static void cmd_list(struct MediaDir* current_dir, const struct Command* cmd) {
     MediaResp r = MEDIA_OK;
     const char* path = ".";
     if (cmd->nb_args >= 2) {
-        r = get_dir(current_dir, cmd->args[1], &dir);
+        r = get_dir(ctx, current_dir, cmd->args[1], &dir);
         path = cmd->args[1];
     } else if (!dir->is_open) {
-        r = open_dir(dir);
+        r = open_dir(ctx, dir);
     }
     switch (r) {
         case MEDIA_OK:
@@ -206,7 +206,7 @@ static void cmd_list(struct MediaDir* current_dir, const struct Command* cmd) {
             return;
     }
 
-    uint64_t perm = get_current_permission();
+    uint64_t perm = get_current_permission(ctx);
 
     for (size_t i = 0; i < dir->nb_subdir; i++) {
         fprintf(stdout, "d%c-%c %s\n",
@@ -222,7 +222,7 @@ static void cmd_list(struct MediaDir* current_dir, const struct Command* cmd) {
     }
 }
 
-static void cmd_get(struct MediaDir* current_dir, const struct Command* cmd) {
+static void cmd_get(struct Context* ctx, struct MediaDir* current_dir, const struct Command* cmd) {
     if (current_dir == NULL) {
         return;
     }
@@ -231,7 +231,7 @@ static void cmd_get(struct MediaDir* current_dir, const struct Command* cmd) {
         return;
     }
     struct MediaFile* f = NULL;
-    MediaResp r = get_file(current_dir, cmd->args[1], &f);
+    MediaResp r = get_file(ctx, current_dir, cmd->args[1], &f);
     switch (r) {
         case MEDIA_OK:
             if (f == NULL) {
@@ -255,7 +255,7 @@ static void cmd_get(struct MediaDir* current_dir, const struct Command* cmd) {
         return;
     }
     fprintf(stdout, "Download %s to %s ...\n", cmd->args[1], cmd->args[2]);
-    r = download_file(f, &fd);
+    r = download_file(ctx, f, &fd);
     switch (r) {
         case MEDIA_OK:
             break;
@@ -278,30 +278,36 @@ static void cmd_get(struct MediaDir* current_dir, const struct Command* cmd) {
 int main(int argc, char** argv) {
 
     if (curl_global_init(CURL_GLOBAL_ALL) != 0) abort();
+    struct Context ctx;
+    initContext(&ctx, NULL, NULL, NULL);
 
     if (argc >= 3) {
-        fprintf(stderr, "[*] Try login to " AUTH_API " ...\n");
-        VMError r = remote_login(argv[1], argv[2]);
+        fprintf(stderr, "[*] Try login to %s" AUTH_API_SUF " ...\n", ctx.base_addr);
+        VMError r = remote_login(&ctx, argv[1], argv[2]);
         switch (r) {
             default:
                 fprintf(stderr, "[!] Unexpected Error\n");
+                freeContext(&ctx);
                 return 1;
             case VM_AUTH_FAIL:
                 fprintf(stderr, "[!] Login Fail\n");
+                freeContext(&ctx);
                 return 1;
             case VM_OK:
                 fprintf(stderr, "[+] Login OK\n");
                 break;
         }
     } else {
-        fprintf(stderr, "[*] Try login at guest to " GUEST_API " ...\n");
-        VMError r = remote_login(NULL, NULL);
+        fprintf(stderr, "[*] Try login at guest to %s" GUEST_API_SUF " ...\n", ctx.base_addr);
+        VMError r = remote_login(&ctx, NULL, NULL);
         switch (r) {
             default:
                 fprintf(stderr, "[!] Unexpected Error\n");
+                freeContext(&ctx);
                 return 1;
             case VM_AUTH_FAIL:
                 fprintf(stderr, "[!] Login Fail\n");
+                freeContext(&ctx);
                 return 1;
             case VM_OK:
                 fprintf(stderr, "[+] Login OK\n");
@@ -312,19 +318,19 @@ int main(int argc, char** argv) {
     fprintf(stderr, "[*] Load index ...\n");
     struct MediaDir root_index = {0};
 
-    MediaResp r = open_index(&root_index);
+    MediaResp r = open_index(&ctx, &root_index);
     switch (r) {
         default:
             fprintf(stderr, "[!] Load index fail : %d\n", r);
-            remote_logout();
+            freeContext(&ctx);
             return 1;
         case MEDIA_UNKNOW:
             fprintf(stderr, "[!] index not found\n");
-            remote_logout();
+            freeContext(&ctx);
             return 1;
         case MEDIA_EMPTY:
             fprintf(stderr, "[!] index empty\n");
-            remote_logout();
+            freeContext(&ctx);
             return 1;
         case MEDIA_OK:
             fprintf(stderr, "[+] Index loaded\n");
@@ -350,29 +356,29 @@ int main(int argc, char** argv) {
                     cmd_help();
                     break;
                 case CMD_PARSE_LIST:
-                    cmd_list(current_dir, &cmdArgs);
+                    cmd_list(&ctx, current_dir, &cmdArgs);
                     break;
                 case CMD_PARSE_GET:
-                    cmd_get(current_dir, &cmdArgs);
+                    cmd_get(&ctx, current_dir, &cmdArgs);
                     break;
                 case CMD_PARSE_RELOAD: {
                     close_index(&root_index);
-                    MediaResp r = open_index(&root_index);
+                    MediaResp r = open_index(&ctx, &root_index);
                     switch (r) {
                         default:
                             fprintf(stderr, "[!] Load index fail : %d\n", r);
                             free_cmd(&cmdArgs);
-                            remote_logout();
+                            freeContext(&ctx);
                             return 1;
                         case MEDIA_UNKNOW:
                             fprintf(stderr, "[!] index not found\n");
                             free_cmd(&cmdArgs);
-                            remote_logout();
+                            freeContext(&ctx);
                             return 1;
                         case MEDIA_EMPTY:
                             fprintf(stderr, "[!] index empty\n");
                             free_cmd(&cmdArgs);
-                            remote_logout();
+                            freeContext(&ctx);
                             return 1;
                         case MEDIA_OK:
                             fprintf(stderr, "[+] Index reloaded\n");
@@ -396,7 +402,7 @@ int main(int argc, char** argv) {
                         break;
                     }
                     struct MediaDir* next_dir = NULL;
-                    MediaResp r = get_dir(current_dir, cmdArgs.args[1], &next_dir);
+                    MediaResp r = get_dir(&ctx, current_dir, cmdArgs.args[1], &next_dir);
                     if (r == MEDIA_OK && next_dir != NULL) {
                         current_dir = next_dir;
                         break;
@@ -449,7 +455,7 @@ int main(int argc, char** argv) {
     }
 
     close_index(&root_index);
-    remote_logout();
+    freeContext(&ctx);
 
     return 0;
 }

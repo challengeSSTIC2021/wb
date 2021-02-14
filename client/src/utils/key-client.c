@@ -14,13 +14,16 @@
 
 #define BUFF_SIZE 4096
 
-static struct addrinfo addr_info = {0};
-static bool addr_info_init = false;
+//static struct addrinfo addr_info = {0};
+//static bool addr_info_init = false;
 
-static KeyResp send_recv(const char* in, size_t in_size, char* out, size_t *out_size) {
+static KeyResp send_recv(struct Context* ctx, const char* in, size_t in_size, char* out, size_t *out_size) {
     int fd = -1;
+    if (ctx == NULL) {
+        return RESP_INTERNAL_ERROR;
+    }
 
-    if (!addr_info_init) {
+    if (!ctx->addr_info_init) {
         struct addrinfo hints = {0};
         struct addrinfo *result, *rp;
 
@@ -29,7 +32,7 @@ static KeyResp send_recv(const char* in, size_t in_size, char* out, size_t *out_
         hints.ai_protocol = 0;
         hints.ai_flags = AI_PASSIVE;
 
-        int s = getaddrinfo(KEYSERVER_ADDRESS, KEYSERVER_PORT, &hints, &result);
+        int s = getaddrinfo(ctx->keyserver_addr, ctx->keyserver_port, &hints, &result);
         if (s != 0) {
             fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
             return RESP_INTERNAL_ERROR;
@@ -56,28 +59,28 @@ static KeyResp send_recv(const char* in, size_t in_size, char* out, size_t *out_
             return RESP_INTERNAL_ERROR;
         }
 
-        addr_info.ai_addr = malloc(rp->ai_addrlen);
-        if (addr_info.ai_addr == NULL) {
+        ctx->addr_info.ai_addr = malloc(rp->ai_addrlen);
+        if (ctx->addr_info.ai_addr == NULL) {
             freeaddrinfo(result);
             fprintf(stderr, "malloc error\n");
             return RESP_INTERNAL_ERROR;
         }
-        memcpy(addr_info.ai_addr, rp->ai_addr, rp->ai_addrlen);
-        addr_info.ai_family = rp->ai_family;
-        addr_info.ai_socktype = rp->ai_socktype;
-        addr_info.ai_protocol = rp->ai_protocol;
-        addr_info.ai_addrlen = rp->ai_addrlen;
+        memcpy(ctx->addr_info.ai_addr, rp->ai_addr, rp->ai_addrlen);
+        ctx->addr_info.ai_family = rp->ai_family;
+        ctx->addr_info.ai_socktype = rp->ai_socktype;
+        ctx->addr_info.ai_protocol = rp->ai_protocol;
+        ctx->addr_info.ai_addrlen = rp->ai_addrlen;
 
         freeaddrinfo(result);
-        addr_info_init = true;
+        ctx->addr_info_init = true;
     } else {
-        fd = socket(addr_info.ai_family, addr_info.ai_socktype, addr_info.ai_protocol);
+        fd = socket(ctx->addr_info.ai_family, ctx->addr_info.ai_socktype, ctx->addr_info.ai_protocol);
         if (fd == -1) {
             fprintf(stderr, "socket error\n");
             return RESP_INTERNAL_ERROR;
         }
 
-        if (connect(fd, addr_info.ai_addr, addr_info.ai_addrlen) == -1) {
+        if (connect(fd, ctx->addr_info.ai_addr, ctx->addr_info.ai_addrlen) == -1) {
             fprintf(stderr, "Could not connect\n");
             close(fd);
             return RESP_INTERNAL_ERROR;
@@ -101,7 +104,7 @@ static KeyResp send_recv(const char* in, size_t in_size, char* out, size_t *out_
     return out[0];
 }
 
-KeyResp check_hsign(struct vmsign* payload, unsigned char* plain) {
+KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* plain) {
     char in_msg[1 + sizeof(struct vmsign)];
     char out_msg[17];
     size_t out_msg_size = sizeof(out_msg);
@@ -110,7 +113,7 @@ KeyResp check_hsign(struct vmsign* payload, unsigned char* plain) {
     memcpy(&in_msg[1], payload->data, sizeof(payload->data));
     memcpy(&in_msg[1 + sizeof(payload->data)], payload->ident, sizeof(payload->ident));
 
-    KeyResp r = send_recv(in_msg, sizeof(in_msg), out_msg, &out_msg_size);
+    KeyResp r = send_recv(ctx, in_msg, sizeof(in_msg), out_msg, &out_msg_size);
     if ((r == RESP_CHECK_OK || r == RESP_CHECK_EXPIRED) && out_msg_size == sizeof(out_msg)) {
         memcpy(plain, &out_msg[1], 16);
         return r;
@@ -123,7 +126,7 @@ KeyResp check_hsign(struct vmsign* payload, unsigned char* plain) {
     }
 }
 
-KeyResp getkey(struct vmsign* payload, unsigned char* key, unsigned char* counter) {
+KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key, unsigned char* counter) {
     char in_msg[1 + sizeof(struct vmsign)] = {0};
     char out_msg[1 + 16 + 16] = {0};
     size_t out_msg_size = sizeof(out_msg);
@@ -132,7 +135,7 @@ KeyResp getkey(struct vmsign* payload, unsigned char* key, unsigned char* counte
     memcpy(&in_msg[1], payload->data, sizeof(payload->data));
     memcpy(&in_msg[1 + sizeof(payload->data)], payload->ident, sizeof(payload->ident));
 
-    KeyResp r = send_recv(in_msg, sizeof(in_msg), out_msg, &out_msg_size);
+    KeyResp r = send_recv(ctx, in_msg, sizeof(in_msg), out_msg, &out_msg_size);
     if (r == RESP_GETKEY_OK && out_msg_size == sizeof(out_msg)) {
         memcpy(key, &out_msg[1], 16);
         memcpy(counter, &out_msg[17], 16);

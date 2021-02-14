@@ -1,8 +1,10 @@
 #ifndef WB_LOADER_H
 #define WB_LOADER_H
 
+#include "config.h"
 #include <dlfcn.h>
 #include <stdint.h>
+#include "macro.h"
 
 typedef enum {
     VM_OK = 0,
@@ -11,17 +13,17 @@ typedef enum {
     VM_INTERNAL_ERROR = 0xff,
 } VMError;
 
-VMError remote_login(const char* username, const char* password);
-VMError remote_logout();
-VMError relogin();
+NO_EXPORT VMError remote_login(struct Context* ctx, const char* username, const char* password);
+NO_EXPORT VMError remote_logout(struct Context* ctx);
+NO_EXPORT VMError relogin(struct Context* ctx);
 
-uint64_t get_current_permission();
+NO_EXPORT uint64_t get_current_permission(struct Context* ctx);
 
 struct vmsign {
   uint8_t data[16];
   uint8_t ident[4];
 };
 
-VMError hsign(uint64_t toSign, struct vmsign* out);
+NO_EXPORT VMError hsign(struct Context* ctx, uint64_t toSign, struct vmsign* out);
 
 #endif

@@ -2,6 +2,8 @@
 #define KEY_CLIENT_H_
 
 #include "wb_loader.h"
+#include "macro.h"
+#include "config.h"
 
 typedef enum {
     REQ_CHECK = 0,
@@ -22,7 +24,7 @@ typedef enum {
     RESP_INTERNAL_ERROR = 0xffffffff,
 } KeyResp;
 
-KeyResp check_hsign(struct vmsign* payload, unsigned char* plain);
-KeyResp getkey(struct vmsign* payload, unsigned char* key, unsigned char* counter);
+NO_EXPORT KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* plain);
+NO_EXPORT KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key, unsigned char* counter);
 
 #endif

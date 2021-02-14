@@ -1,5 +1,11 @@
-
+#define _GNU_SOURCE
+#ifndef HTTP_WITH_VLC
 #include <curl/curl.h>
+#else
+#include <vlc_common.h>
+#include <vlc_access.h>
+#include <vlc_url.h>
+#endif
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,28 +17,17 @@
 #include "key-client.h"
 #include "config.h"
 
-struct {
-    char* currentlogin;
-    char* currentpassword;
-
-    void* libhandle;
-
-    int (*useVM)(const unsigned char*, unsigned char*);
-    int (*getSuffix)(unsigned char*);
-    int (*getIdent)(unsigned char*);
-} internal_state;
-
-static inline VMError hsign_raw(uint64_t toSign, struct vmsign* out) {
-    if (internal_state.getSuffix == NULL || internal_state.getIdent == NULL || internal_state.useVM == NULL) {
+static inline VMError hsign_raw(struct Context* ctx, uint64_t toSign, struct vmsign* out) {
+    if (ctx->getSuffix == NULL || ctx->getIdent == NULL || ctx->useVM == NULL) {
         return VM_INTERNAL_ERROR;
     }
-    internal_state.getIdent((unsigned char*) out->ident);
+    ctx->getIdent((unsigned char*) out->ident);
 
     unsigned char b[16];
     *( (uint64_t*) &b) = toSign;
-    internal_state.getSuffix(&b[8]);
+    ctx->getSuffix(&b[8]);
 
-    int t = internal_state.useVM(b, (unsigned char*) out->data);
+    int t = ctx->useVM(b, (unsigned char*) out->data);
     if (t != 0) {
         return VM_SIGN_FAIL;
     } else {
@@ -40,38 +35,53 @@ static inline VMError hsign_raw(uint64_t toSign, struct vmsign* out) {
     }
 }
 
-static VMError close_state() {
-    if (internal_state.libhandle == NULL) {
+static VMError close_state(struct Context* ctx) {
+    if (ctx->libhandle == NULL) {
         return VM_OK;
     }
 
-    dlclose(internal_state.libhandle);
-    internal_state.libhandle = NULL;
-    internal_state.useVM = NULL;
-    internal_state.getSuffix = NULL;
-    internal_state.getIdent = NULL;
+    dlclose(ctx->libhandle);
+    ctx->libhandle = NULL;
+    ctx->useVM = NULL;
+    ctx->getSuffix = NULL;
+    ctx->getIdent = NULL;
 
     return VM_OK;
 }
+
+#ifndef HTTP_WITH_VLC
 
 static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdata) {
     int fd = *((int*) userdata);
     return write(fd, ptr, size*nmemb);
 }
 
-static inline VMError open_state_internal() {
-    if (internal_state.libhandle != NULL) {
+static inline VMError open_state_internal(struct Context* ctx) {
+    if (ctx->libhandle != NULL) {
         return VM_OK;
     }
+    char* url;
+    if (ctx->currentlogin != NULL && ctx->currentpassword != NULL) {
+        if (asprintf(&url, "%s" AUTH_API_SUF, ctx->base_addr) == -1) {
+            return VM_INTERNAL_ERROR;
+        }
+    } else {
+        if (asprintf(&url, "%s" GUEST_API_SUF, ctx->base_addr) == -1) {
+            return VM_INTERNAL_ERROR;
+        }
+    }
+
     char path[] = "/tmp/libVMXXXXXX.so";
     int fd = mkstemps(path, 3);
 
     if (fd == -1) {
+        free(url);
         return VM_INTERNAL_ERROR;
     }
 
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
+        free(url);
         return VM_INTERNAL_ERROR;
     }
     if (curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) != CURLE_OK ) goto curlError;
@@ -79,12 +89,12 @@ static inline VMError open_state_internal() {
     if (curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback) != CURLE_OK ) goto curlError;
     if (curl_easy_setopt(curl, CURLOPT_WRITEDATA, &fd) != CURLE_OK ) goto curlError;
 
-    if (internal_state.currentlogin != NULL && internal_state.currentpassword != NULL) {
-        if (curl_easy_setopt(curl, CURLOPT_URL, AUTH_API) != CURLE_OK ) goto curlError;
-        if (curl_easy_setopt(curl, CURLOPT_USERNAME, internal_state.currentlogin) != CURLE_OK ) goto curlError;
-        if (curl_easy_setopt(curl, CURLOPT_PASSWORD, internal_state.currentpassword) != CURLE_OK ) goto curlError;
+    if (ctx->currentlogin != NULL && ctx->currentpassword != NULL) {
+        if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ) goto curlError;
+        if (curl_easy_setopt(curl, CURLOPT_USERNAME, ctx->currentlogin) != CURLE_OK ) goto curlError;
+        if (curl_easy_setopt(curl, CURLOPT_PASSWORD, ctx->currentpassword) != CURLE_OK ) goto curlError;
     } else {
-        if (curl_easy_setopt(curl, CURLOPT_URL, GUEST_API) != CURLE_OK ) goto curlError;
+        if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ) goto curlError;
     }
 
     if (curl_easy_perform(curl) != CURLE_OK ) goto curlError;
@@ -94,6 +104,7 @@ static inline VMError open_state_internal() {
     if (curl_easy_getinfo (curl, CURLINFO_RESPONSE_CODE, &http_code) != CURLE_OK ) goto curlError;
     if (http_code != 200) {
         curl_easy_cleanup(curl);
+        free(url);
         unlink(path);
         if (http_code == 401) {
             return VM_AUTH_FAIL;
@@ -103,23 +114,24 @@ static inline VMError open_state_internal() {
     }
 
     curl_easy_cleanup(curl);
+    free(url);
 
     chmod(path, 0700);
 
-    internal_state.libhandle = dlopen(path, RTLD_LOCAL | RTLD_LAZY);
+    ctx->libhandle = dlopen(path, RTLD_LOCAL | RTLD_LAZY);
 
     unlink(path);
 
-    if (internal_state.libhandle == NULL) {
+    if (ctx->libhandle == NULL) {
         return VM_INTERNAL_ERROR;
     }
 
-    internal_state.useVM = (int (*)(const unsigned char*, unsigned char*)) dlsym(internal_state.libhandle, "useVM");
-    internal_state.getSuffix = (int (*)(unsigned char*)) dlsym(internal_state.libhandle, "getSuffix");
-    internal_state.getIdent = (int (*)(unsigned char*)) dlsym(internal_state.libhandle, "getIdent");
+    ctx->useVM = (int (*)(const unsigned char*, unsigned char*)) dlsym(ctx->libhandle, "useVM");
+    ctx->getSuffix = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getSuffix");
+    ctx->getIdent = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getIdent");
 
-    if (internal_state.useVM == NULL || internal_state.getSuffix == NULL || internal_state.getIdent == NULL) {
-        close_state();
+    if (ctx->useVM == NULL || ctx->getSuffix == NULL || ctx->getIdent == NULL) {
+        close_state(ctx);
         return VM_INTERNAL_ERROR;
     }
 
@@ -129,22 +141,125 @@ curlError:
     curl_easy_cleanup(curl);
     close(fd);
     unlink(path);
+    free(url);
     return VM_INTERNAL_ERROR;
 }
 
-static VMError open_state() {
+#else
+
+static inline VMError open_state_internal(struct Context* ctx) {
+    if (ctx->libhandle != NULL) {
+        return VM_OK;
+    }
+    char* url;
+    if (ctx->currentlogin == NULL || ctx->currentpassword == NULL) {
+        if (asprintf(&url, "%s" GUEST_API_SUF, ctx->base_addr) == -1) {
+            return VM_INTERNAL_ERROR;
+        }
+    } else {
+        struct vlc_url_t url_desc;
+        if (vlc_UrlParse(&url_desc, ctx->base_addr) == -1) {
+            vlc_UrlClean(&url_desc);
+            return VM_INTERNAL_ERROR;
+        }
+
+        if (url_desc.i_port == 0){
+            if (asprintf(&url, "%s://%s:%s@%s/%s" AUTH_API_SUF,
+                        url_desc.psz_protocol,
+                        ctx->currentlogin,
+                        ctx->currentpassword,
+                        url_desc.psz_host,
+                        (url_desc.psz_path!=NULL)?url_desc.psz_path:"") == -1) {
+                vlc_UrlClean(&url_desc);
+                return VM_INTERNAL_ERROR;
+            }
+        } else {
+            if (asprintf(&url, "%s://%s:%s@%s:%d/%s" AUTH_API_SUF,
+                        url_desc.psz_protocol,
+                        ctx->currentlogin,
+                        ctx->currentpassword,
+                        url_desc.psz_host,
+                        url_desc.i_port,
+                        (url_desc.psz_path!=NULL)?url_desc.psz_path:"") == -1) {
+                vlc_UrlClean(&url_desc);
+                return VM_INTERNAL_ERROR;
+            }
+        }
+        vlc_UrlClean(&url_desc);
+    }
+
+    char path[] = "/tmp/libVMXXXXXX.so";
+    int fd = mkstemps(path, 3);
+
+    if (fd == -1) {
+        free(url);
+        return VM_INTERNAL_ERROR;
+    }
+
+    stream_t* stream = vlc_stream_NewURL(ctx->vlc_sd, url);
+    if (stream == NULL) {
+        close(fd);
+        free(url);
+        unlink(path);
+        return VM_INTERNAL_ERROR;
+    }
+
+    const size_t block_size = 65536;
+    unsigned char buffer[block_size] = {0};
+    size_t recv_size;
+
+    do {
+        recv_size = vlc_stream_ReadPartial(stream, buffer, block_size);
+        if (recv_size < 0) {
+            vlc_stream_Delete(stream);
+            close(fd);
+            free(url);
+            unlink(path);
+            return VM_INTERNAL_ERROR;
+        }
+        write(fd, buffer, recv_size);
+    } while (recv_size == block_size || !vlc_stream_Eof(stream));
+
+    vlc_stream_Delete(stream);
+    close(fd);
+    free(url);
+
+    chmod(path, 0700);
+
+    ctx->libhandle = dlopen(path, RTLD_LOCAL | RTLD_LAZY);
+
+    unlink(path);
+
+    if (ctx->libhandle == NULL) {
+        return VM_INTERNAL_ERROR;
+    }
+
+    ctx->useVM = (int (*)(const unsigned char*, unsigned char*)) dlsym(ctx->libhandle, "useVM");
+    ctx->getSuffix = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getSuffix");
+    ctx->getIdent = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getIdent");
+
+    if (ctx->useVM == NULL || ctx->getSuffix == NULL || ctx->getIdent == NULL) {
+        close_state(ctx);
+        return VM_INTERNAL_ERROR;
+    }
+
+    return VM_OK;
+}
+#endif
+
+static VMError open_state(struct Context* ctx) {
     const int retry = 10;
 
     // retry and check load
     for (int i = 0; i < retry; i++) {
-        VMError res = open_state_internal();
+        VMError res = open_state_internal(ctx);
         if (res == VM_OK) {
             struct vmsign s = {0};
             unsigned char out[16] = {0};
-            res = hsign_raw(0, &s);
+            res = hsign_raw(ctx, 0, &s);
             if (res == VM_OK) {
-                uint64_t suffix = get_current_permission();
-                KeyResp r = check_hsign(&s, out);
+                uint64_t suffix = get_current_permission(ctx);
+                KeyResp r = check_hsign(ctx, &s, out);
                 if (r == RESP_CHECK_OK && (*((uint64_t*) out) == 0) && (*((uint64_t*) &out[8]) == suffix)) {
                     return VM_OK;
                 } else {
@@ -154,10 +269,10 @@ static VMError open_state() {
                 fprintf(stderr, "[%d] hsign_raw return %d\n", i, res);
             }
         } else {
-            close_state();
+            close_state(ctx);
             return res;
         }
-        close_state();
+        close_state(ctx);
         if (i == retry - 1) {
             break;
         }
@@ -166,80 +281,89 @@ static VMError open_state() {
     return VM_INTERNAL_ERROR;
 }
 
-static inline int reopen_state() {
-    if (internal_state.libhandle != NULL) {
-        close_state();
+static inline int reopen_state(struct Context* ctx) {
+    if (ctx->libhandle != NULL) {
+        close_state(ctx);
     }
-    return open_state();
+    return open_state(ctx);
 }
 
-VMError remote_login(const char* username, const char* password) {
+VMError remote_login(struct Context* ctx, const char* username, const char* password) {
+    if (ctx == NULL) {
+        return VM_INTERNAL_ERROR;
+    }
     if (username == NULL || password == NULL) {
-        if (internal_state.currentlogin != NULL || internal_state.currentpassword != NULL) {
-            close_state();
-            if (internal_state.currentlogin != NULL) free(internal_state.currentlogin);
-            if (internal_state.currentpassword != NULL) free(internal_state.currentpassword);
-            internal_state.currentlogin = NULL;
-            internal_state.currentpassword = NULL;
+        if (ctx->currentlogin != NULL || ctx->currentpassword != NULL) {
+            close_state(ctx);
+            if (ctx->currentlogin != NULL) free(ctx->currentlogin);
+            if (ctx->currentpassword != NULL) free(ctx->currentpassword);
+            ctx->currentlogin = NULL;
+            ctx->currentpassword = NULL;
         }
-        if (internal_state.libhandle == NULL) {
-            return open_state();
+        if (ctx->libhandle == NULL) {
+            return open_state(ctx);
         }
         return VM_OK;
     }
-    if (internal_state.libhandle != NULL) {
-        if (internal_state.currentlogin != NULL || internal_state.currentpassword != NULL) {
-            if (strcmp(internal_state.currentlogin, username) == 0 &&
-                strcmp(internal_state.currentpassword, password) == 0) {
+    if (ctx->libhandle != NULL) {
+        if (ctx->currentlogin != NULL || ctx->currentpassword != NULL) {
+            if (strcmp(ctx->currentlogin, username) == 0 &&
+                strcmp(ctx->currentpassword, password) == 0) {
                 return VM_OK;
             }
         }
-        close_state();
+        close_state(ctx);
     }
-    if (internal_state.currentlogin != NULL) free(internal_state.currentlogin);
-    if (internal_state.currentpassword != NULL) free(internal_state.currentpassword);
-    internal_state.currentlogin = strdup(username);
-    internal_state.currentpassword = strdup(password);
+    if (ctx->currentlogin != NULL) free(ctx->currentlogin);
+    if (ctx->currentpassword != NULL) free(ctx->currentpassword);
+    ctx->currentlogin = strdup(username);
+    ctx->currentpassword = strdup(password);
 
-    return open_state();
+    return open_state(ctx);
 }
 
-VMError remote_logout() {
-    if (internal_state.currentlogin != NULL || internal_state.currentpassword != NULL) {
-        close_state();
-        if (internal_state.currentlogin != NULL) free(internal_state.currentlogin);
-        if (internal_state.currentpassword != NULL) free(internal_state.currentpassword);
-        internal_state.currentlogin = NULL;
-        internal_state.currentpassword = NULL;
+VMError remote_logout(struct Context* ctx) {
+    if (ctx == NULL) {
+        return VM_INTERNAL_ERROR;
+    }
+    if (ctx->currentlogin != NULL || ctx->currentpassword != NULL) {
+        close_state(ctx);
+        if (ctx->currentlogin != NULL) free(ctx->currentlogin);
+        if (ctx->currentpassword != NULL) free(ctx->currentpassword);
+        ctx->currentlogin = NULL;
+        ctx->currentpassword = NULL;
     }
     return VM_OK;
 }
 
-VMError relogin() {
-    return reopen_state();
+VMError relogin(struct Context* ctx) {
+    return reopen_state(ctx);
 }
 
-uint64_t get_current_permission() {
-    if (internal_state.getSuffix == NULL) {
-        VMError res = open_state();
+uint64_t get_current_permission(struct Context* ctx) {
+    if (ctx->getSuffix == NULL) {
+        VMError res = open_state(ctx);
         if (res != VM_OK) {
             return 0xffffffffffffffff;
         }
     }
 
     uint64_t res;
-    internal_state.getSuffix( (unsigned char*) &res);
+    ctx->getSuffix( (unsigned char*) &res);
     return res;
 }
 
-VMError hsign(uint64_t toSign, struct vmsign* out) {
-    if (internal_state.getSuffix == NULL || internal_state.getIdent == NULL || internal_state.useVM == NULL) {
-        VMError res = open_state();
+VMError hsign(struct Context* ctx, uint64_t toSign, struct vmsign* out) {
+    if (ctx == NULL) {
+        return VM_INTERNAL_ERROR;
+    }
+    if (ctx->getSuffix == NULL || ctx->getIdent == NULL || ctx->useVM == NULL) {
+        VMError res = open_state(ctx);
         if (res != VM_OK) {
             return res;
         }
     }
-    VMError res = hsign_raw(toSign, out);
+    VMError res = hsign_raw(ctx, toSign, out);
     if (res != VM_OK) {
         return res;
     }
@@ -248,11 +372,11 @@ VMError hsign(uint64_t toSign, struct vmsign* out) {
     unsigned long current_ts = time(NULL);
 
     if (VM_ts + TIMEOUT_VM < current_ts) {
-        res = reopen_state();
+        res = reopen_state(ctx);
         if (res != VM_OK) {
             return res;
         }
-        res = hsign_raw(toSign, out);
+        res = hsign_raw(ctx, toSign, out);
         if (res != VM_OK) {
             return res;
         }

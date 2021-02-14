@@ -14,5 +14,10 @@
         "outdir": "./guest",
         "type": "bin",
         "guest": null
+    }, {
+        "name": "SampleVideo_1280x720_30mb.mp4",
+        "outdir": "./guest",
+        "type": "mp4",
+        "guest": null
     }
 ]
