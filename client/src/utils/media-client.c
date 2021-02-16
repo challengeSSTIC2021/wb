@@ -117,6 +117,8 @@ curlError:
 
 #else
 
+#define BLOCK_SIZE 262144
+
 static inline MediaResp download_media(struct Context* ctx, const char* name, struct write_data *cb_data) {
     char* url;
     if (asprintf(&url, "%s" FILES_API_SUF "%s", ctx->base_addr, name) == -1) {
@@ -125,14 +127,13 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
 
     stream_t* stream = vlc_stream_NewURL(ctx->vlc_obj, url);
 
-    const size_t block_size = 65536;
-    unsigned char buffer[block_size] = {0};
+    unsigned char buffer[BLOCK_SIZE] = {0};
     size_t recv_size;
     bool stop = false;
 
     do {
-        recv_size = vlc_stream_Read(stream, buffer, block_size);
-        if (recv_size != block_size) {
+        recv_size = vlc_stream_Read(stream, buffer, BLOCK_SIZE);
+        if (recv_size != BLOCK_SIZE) {
             if (recv_size < 0 || !vlc_stream_Eof(stream)) {
                 vlc_stream_Delete(stream);
                 return MEDIA_UNEXPECTED_ERROR;
@@ -155,6 +156,8 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
 
     return MEDIA_OK;
 }
+#undef BLOCK_SIZE
+
 #endif
 
 static inline int create_tmp_file() {
@@ -561,20 +564,21 @@ static inline MediaResp get_dir_path_(struct MediaDir* curdir, char** out, size_
             return MEDIA_UNEXPECTED_ERROR;
         }
         memset(*out, '\0', 2+l);
-        strncpy(*out, "/", 2);
+        strcpy(*out, "/");
     } else {
         if (curdir->name == NULL) {
             return MEDIA_UNEXPECTED_ERROR;
         }
-        MediaResp r = get_dir_path_(curdir->parent, out, l + 1 + strlen(curdir->name));
+        const size_t name_len = strlen(curdir->name);
+        MediaResp r = get_dir_path_(curdir->parent, out, l + 1 + name_len);
         if (r != MEDIA_OK) {
             return r;
         }
         if (*out == NULL) {
             return MEDIA_UNEXPECTED_ERROR;
         }
-        strncat(*out, curdir->name, strlen(curdir->name));
-        strncat(*out, "/", 1);
+        strncat(*out, curdir->name, name_len);
+        strcat(*out, "/");
     }
     return MEDIA_OK;
 }
@@ -587,14 +591,15 @@ MediaResp get_file_path(struct MediaFile* curfile, char** out) {
     if (curfile == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
-    MediaResp r = get_dir_path_(curfile->parent, out, strlen(curfile->name));
+    const size_t l = strlen(curfile->name);
+    MediaResp r = get_dir_path_(curfile->parent, out, l);
     if (r != MEDIA_OK) {
         return r;
     }
     if (*out == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
-    strncat(*out, curfile->name, strlen(curfile->name));
+    strncat(*out, curfile->name, l);
     return MEDIA_OK;
 }
 

@@ -60,3 +60,4 @@ target_include_directories(vlc_module PRIVATE
 target_link_libraries(vlc_module PRIVATE -ldl ${CJSON_LIB})
 
 add_dependencies(vlc_module cJson)
+

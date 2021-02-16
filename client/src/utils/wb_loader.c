@@ -147,6 +147,8 @@ curlError:
 
 #else
 
+#define BLOCK_SIZE 262144
+
 static inline VMError open_state_internal(struct Context* ctx) {
     if (ctx->libhandle != NULL) {
         return VM_OK;
@@ -204,12 +206,11 @@ static inline VMError open_state_internal(struct Context* ctx) {
         return VM_INTERNAL_ERROR;
     }
 
-    const size_t block_size = 65536;
-    unsigned char buffer[block_size] = {0};
+    unsigned char buffer[BLOCK_SIZE] = {0};
     size_t recv_size;
 
     do {
-        recv_size = vlc_stream_ReadPartial(stream, buffer, block_size);
+        recv_size = vlc_stream_ReadPartial(stream, buffer, BLOCK_SIZE);
         if (recv_size < 0) {
             vlc_stream_Delete(stream);
             close(fd);
@@ -218,7 +219,7 @@ static inline VMError open_state_internal(struct Context* ctx) {
             return VM_INTERNAL_ERROR;
         }
         write(fd, buffer, recv_size);
-    } while (recv_size == block_size || !vlc_stream_Eof(stream));
+    } while (recv_size == BLOCK_SIZE || !vlc_stream_Eof(stream));
 
     vlc_stream_Delete(stream);
     close(fd);
@@ -245,6 +246,8 @@ static inline VMError open_state_internal(struct Context* ctx) {
 
     return VM_OK;
 }
+
+#undef BLOCK_SIZE
 #endif
 
 static VMError open_state(struct Context* ctx) {

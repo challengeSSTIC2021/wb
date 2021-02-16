@@ -97,7 +97,6 @@ static void error_Media(MediaResp r, stream_t *p_access, const char* path) {
 
 static int OpenSD( vlc_object_t* sd_this);
 static void CloseSD( vlc_object_t* sd_this);
-static void *RunSD(void* data);
 static int OpenAccess( vlc_object_t* sd_this);
 static void CloseAccess( vlc_object_t* sd_this);
 static void *DownloadAccess(void* data);
@@ -108,6 +107,7 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size);
 static int AccessReadDir(stream_t *p_access, input_item_node_t* item);
 
 struct services_discovery_sys_t {
+    input_item_t* root_item;
     services_discovery_t* parent;
     vlc_thread_t thread;
 };
@@ -131,7 +131,7 @@ struct access_sys_t {
 };
 
 static int vlc_sd_probe_Open (vlc_object_t *obj) {
-    vlc_sd_probe_Add ((struct vlc_probe_t *)obj, PREFIX_SERVICE, N_("Chall media services"), SD_CAT_MYCOMPUTER);
+    vlc_sd_probe_Add ((struct vlc_probe_t *)obj, PREFIX_SERVICE "_SD", N_("Chall media services"), SD_CAT_INTERNET);
     return VLC_PROBE_CONTINUE;
 }
 
@@ -140,15 +140,15 @@ vlc_module_begin()
     set_subcategory( SUBCAT_PLAYLIST_SD )
     set_shortname( N_("Chall") )
     set_description( N_("Chall media services") )
-    set_callbacks( OpenSD, CloseSD )
     set_capability( "services_discovery", 0 )
-    add_shortcut( PREFIX_SERVICE )
+    set_callbacks( OpenSD, CloseSD )
+    add_shortcut( PREFIX_SERVICE "_SD" )
 
     add_submodule()
         set_category( CAT_INPUT )
         set_subcategory( SUBCAT_INPUT_ACCESS )
         set_callbacks( OpenAccess, CloseAccess )
-        set_capability( "access", 0 )
+        set_capability( "access", 10 )
         add_shortcut( PREFIX_SERVICE )
         add_string("media-server", DEFAULT_BASE_URL, "media server URL", "Change the media server to retrived the media", false)
         add_string("key-server-addr", DEFAULT_KEYSERVER_ADDRESS, "key server address", "Change the key server address", false)
@@ -173,15 +173,17 @@ static int OpenSD( vlc_object_t* sd_this) {
     p_sys->parent = p_sd;
 
     p_sd->p_sys = p_sys;
-    p_sd->description = vlc_gettext(N_("Chall media server"));
+    p_sd->description = vlc_gettext(N_("Chall media services"));
 
     global_init();
 
-
-    if ( vlc_clone( &p_sys->thread, RunSD, p_sys, VLC_THREAD_PRIORITY_LOW)) {
+    p_sys->root_item = input_item_NewDirectory("chall:///", "/", ITEM_NET);
+    if (p_sys->root_item == NULL) {
         free(p_sys);
-        return VLC_EGENERIC;
+        return VLC_ENOMEM;
     }
+    input_item_AddOption(p_sys->root_item, "recursive=collapse", VLC_INPUT_OPTION_TRUSTED|VLC_INPUT_OPTION_UNIQUE);
+    services_discovery_AddItem(p_sd, p_sys->root_item);
 
     return VLC_SUCCESS;
 }
@@ -190,42 +192,11 @@ static void CloseSD( vlc_object_t* sd_this) {
 
     services_discovery_t *p_sd = ( services_discovery_t* ) sd_this;
     services_discovery_sys_t *p_sys = p_sd->p_sys;
-    vlc_join( p_sys->thread, NULL );
 
+    services_discovery_RemoveItem(p_sd, p_sys->root_item);
+    input_item_Release(p_sys->root_item);
     free(p_sys);
     p_sd->p_sys = NULL;
-}
-
-static void add_subnode(const vlc_event_t *p_event, void *data) {
-    services_discovery_sys_t *p_sys = (services_discovery_sys_t*) data;
-
-    input_item_node_t *root = p_event->u.input_item_subitem_tree_added.p_root;
-
-    for(int i = 0; i < root->i_children; i++) {
-        services_discovery_AddItem(p_sys->parent, root->pp_children[i]->p_item);
-    }
-}
-
-static void *RunSD(void* data) {
-
-    services_discovery_sys_t *p_sys = (services_discovery_sys_t*) data;
-
-    input_item_t* root = input_item_NewDirectory(PREFIX_SERVICE ":///", NULL, ITEM_NET);
-    if (root == NULL) {
-        return NULL;
-    }
-    input_item_AddOption(root, "recursive=collapse", VLC_INPUT_OPTION_TRUSTED|VLC_INPUT_OPTION_UNIQUE);
-
-    vlc_event_manager_t *em = &root->event_manager;
-    vlc_event_attach(em, vlc_InputItemSubItemTreeAdded, add_subnode, data);
-
-    input_Read(p_sys->parent, root);
-
-    vlc_event_detach(em, vlc_InputItemSubItemTreeAdded, add_subnode, data);
-
-    input_item_Release(root);
-
-    return NULL;
 }
 
 static int OpenAccess( vlc_object_t* access_this) {
@@ -366,7 +337,6 @@ static void CloseAccess( vlc_object_t* access_this) {
     p_access->p_sys = NULL;
 }
 
-
 static void *DownloadAccess(void* data) {
 
     access_sys_t *p_sys = (access_sys_t*) data;
@@ -454,7 +424,7 @@ static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
             return VLC_ENOMEM;
         }
 
-        vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->files[i].name, ITEM_TYPE_FILE, ITEM_NET);
+        vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->files[i].name, ITEM_TYPE_FILE, ITEM_NET_UNKNOWN);
         free(path);
         free(full_path);
     }
@@ -473,7 +443,7 @@ static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
             return VLC_ENOMEM;
         }
 
-        vlc_readdir_helper_additem(&rdh, full_path, NULL, full_path /*p_sys->dir->subdir[i].name*/, ITEM_TYPE_DIRECTORY, ITEM_NET);
+        vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->subdir[i].name, ITEM_TYPE_DIRECTORY, ITEM_NET_UNKNOWN);
         free(path);
         free(full_path);
     }
