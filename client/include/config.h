@@ -25,6 +25,8 @@
 
 #ifdef HTTP_WITH_VLC
 #include <vlc_common.h>
+#include <vlc_stream.h>
+#include <vlc_threads.h>
 #endif
 
 
@@ -45,7 +47,8 @@ struct Context {
     int (*getIdent)(unsigned char*);
 
 #ifdef HTTP_WITH_VLC
-    vlc_object_t* vlc_obj;
+    stream_t* vlc_obj;
+    vlc_mutex_t read_mutex;
 #endif
 };
 

@@ -144,7 +144,9 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
             crypto_stream_aes128ctr_xor(buffer, buffer, recv_size, cb_data->counter, cb_data->key);
             store32_bigendian(&cb_data->counter[12], (recv_size >> 4) + load32_bigendian(&cb_data->counter[12]));
         }
+        vlc_mutex_lock(&ctx->read_mutex);
         write(cb_data->fd, buffer, recv_size);
+        vlc_mutex_unlock(&ctx->read_mutex);
 
     } while (!stop);
 

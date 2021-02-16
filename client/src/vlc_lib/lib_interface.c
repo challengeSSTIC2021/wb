@@ -56,7 +56,7 @@ static void global_init() {
     is_init = true;
 }
 
-static void get_context(vlc_object_t* vlc_obj) {
+static void get_context(stream_t* vlc_obj) {
     vlc_mutex_lock(&global_ctx.ctx_mutex);
     global_ctx.ctx.vlc_obj = vlc_obj;
 }
@@ -125,7 +125,8 @@ struct access_sys_t {
     int fd;
     unsigned char key[16];
     unsigned char counter[16];
-    vlc_mutex_t ctx_mutex;
+    uint64_t seek_position;
+    bool download_finish;
     vlc_thread_t thread;
     struct Context tctx;
 };
@@ -211,6 +212,8 @@ static int OpenAccess( vlc_object_t* access_this) {
 
     p_sys->parent = p_access;
     p_sys->fd = -1;
+    p_sys->download_finish = false;
+    p_sys->seek_position = 0;
     global_init();
 
     int key_server_port = var_CreateGetInteger(p_access, "key-server-port");
@@ -222,7 +225,7 @@ static int OpenAccess( vlc_object_t* access_this) {
     char* m_server = var_CreateGetString(p_access, "media-server");
     char* key_server_addr = var_CreateGetString(p_access, "key-server-addr");
 
-    get_context(access_this);
+    get_context(p_access);
 
     setContext(&global_ctx.ctx, m_server, key_server_addr, key_server_port_str);
     free(key_server_addr);
@@ -262,7 +265,6 @@ static int OpenAccess( vlc_object_t* access_this) {
         }
     }
 
-
     p_sys->dir = NULL;
     p_sys->file = NULL;
     MediaResp mr;
@@ -293,16 +295,11 @@ static int OpenAccess( vlc_object_t* access_this) {
             return VLC_EGENERIC;
         }
         initContext(&p_sys->tctx, global_ctx.ctx.base_addr, NULL, NULL);
-        p_sys->tctx.vlc_obj = access_this;
-
-        vlc_mutex_init(&p_sys->ctx_mutex);
-        vlc_mutex_lock(&p_sys->ctx_mutex);
+        p_sys->tctx.vlc_obj = p_access;
         release_context();
 
         if ( vlc_clone( &p_sys->thread, DownloadAccess, p_sys, VLC_THREAD_PRIORITY_LOW)) {
             freeContext(&p_sys->tctx);
-            vlc_mutex_unlock(&p_sys->ctx_mutex);
-            vlc_mutex_destroy(&p_sys->ctx_mutex);
             free(p_sys);
             return VLC_EGENERIC;
         }
@@ -326,7 +323,6 @@ static void CloseAccess( vlc_object_t* access_this) {
     if (!p_sys->is_dir) {
         vlc_join( p_sys->thread, NULL );
 
-        vlc_mutex_destroy(&p_sys->ctx_mutex);
         if (p_sys->fd > 0) {
             close(p_sys->fd);
         }
@@ -345,44 +341,66 @@ static void *DownloadAccess(void* data) {
     if (p_sys->fd != -1) {
         lseek(p_sys->fd, 0, SEEK_SET);
     }
-    vlc_mutex_unlock(&p_sys->ctx_mutex);
+    msg_Info(p_sys->parent, "Finish download");
+    vlc_mutex_lock(&p_sys->tctx.read_mutex);
+    lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
+    p_sys->download_finish = true;
+    vlc_mutex_unlock(&p_sys->tctx.read_mutex);
     return NULL;
 }
 
 static int AccessSeek(stream_t *p_access, uint64_t pos) {
     access_sys_t *p_sys = p_access->p_sys;
 
-    vlc_mutex_lock(&p_sys->ctx_mutex);
-    if (p_sys->fd == -1) {
-        vlc_mutex_unlock(&p_sys->ctx_mutex);
-        return VLC_EGENERIC;
+    vlc_mutex_lock(&p_sys->tctx.read_mutex);
+    if (p_sys->download_finish) {
+        if (lseek(p_sys->fd, pos, SEEK_SET) != pos) {
+            return VLC_EGENERIC;
+        }
+        return VLC_SUCCESS;
+    } else {
+        p_sys->seek_position = pos;
+        return VLC_SUCCESS;
     }
-
-    if (lseek(p_sys->fd, pos, SEEK_SET) != pos) {
-        vlc_mutex_unlock(&p_sys->ctx_mutex);
-        return VLC_EGENERIC;
-    }
-    vlc_mutex_unlock(&p_sys->ctx_mutex);
-    return VLC_SUCCESS;
+    vlc_mutex_unlock(&p_sys->tctx.read_mutex);
 }
 
 static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
     access_sys_t *p_sys = p_access->p_sys;
 
-    if (vlc_mutex_trylock(&p_sys->ctx_mutex) != 0) {
-        return -1;
-    }
-    if (p_sys->fd == -1) {
-        vlc_mutex_unlock(&p_sys->ctx_mutex);
-        return 0;
-    }
+    vlc_mutex_lock(&p_sys->tctx.read_mutex);
+    if (p_sys->download_finish) {
+        ssize_t read_len = read(p_sys->fd, buf, size);
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+        if (read_len < 0) {
+            return 0;
+        }
+        return read_len;
+    } else {
+        if (p_sys->fd == -1) {
+            vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+            return -1;
+        }
+        uint64_t pos = lseek(p_sys->fd, 0, SEEK_END);
+        // check if the position is already feed
+        if (p_sys->seek_position > pos) {
+            vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+            return -1;
+        }
+        lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
+        ssize_t read_len = read(p_sys->fd, buf, size);
+        lseek(p_sys->fd, 0, SEEK_END);
+        p_sys->seek_position += read_len;
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
 
-    ssize_t read_len = read(p_sys->fd, buf, size);
-    vlc_mutex_unlock(&p_sys->ctx_mutex);
-    if (read_len < 0) {
-        return 0;
+        if (read_len < 0) {
+            return 0;
+        }
+        if (read_len == 0) {
+            return -1;
+        }
+        return read_len;
     }
-    return read_len;
 }
 
 static int AccessControl(stream_t *p_access, int query, va_list args) {
