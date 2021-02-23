@@ -1,6 +1,6 @@
 
 #include <stdlib.h>
-
+#include <unistd.h>
 
 #include "config.h"
 #include "wb_loader.h"
@@ -10,10 +10,12 @@ void freeContext(struct Context* ctx) {
         return;
     }
     remote_logout(ctx);
+    if (ctx->keyserver_fd > -1) {
+        close(ctx->keyserver_fd);
+    }
 
     free(ctx->keyserver_addr);
     free(ctx->keyserver_port);
-    free(ctx->addr_info.ai_addr);
     free(ctx->currentlogin);
     free(ctx->currentpassword);
     free(ctx->base_addr);
@@ -21,7 +23,10 @@ void freeContext(struct Context* ctx) {
     vlc_mutex_destroy(&ctx->read_mutex);
 #endif
     memset(ctx, '\0', sizeof(struct Context));
-    ctx->addr_info_init = false;
+    ctx->keyserver_fd = -1;
+#ifdef HTTP_WITH_VLC
+    ctx->stop_download = false;
+#endif
 }
 
 void initContext(struct Context* ctx, char* base_url, char* key_server_url, char* key_server_port) {
@@ -30,9 +35,10 @@ void initContext(struct Context* ctx, char* base_url, char* key_server_url, char
     }
 
     memset(ctx, '\0', sizeof(struct Context));
-    ctx->addr_info_init = false;
-
+    ctx->keyserver_fd = -1;
 #ifdef HTTP_WITH_VLC
+    ctx->stop_download = false;
+
     vlc_mutex_init(&ctx->read_mutex);
 #endif
     setContext(ctx, base_url, key_server_url, key_server_port);
@@ -71,12 +77,12 @@ void setContext(struct Context* ctx, char* base_url, char* key_server_url, char*
             reset_addr_info = true;
         }
     } else if (ctx->keyserver_port == NULL) {
-        ctx->keyserver_port = strdup(str(DEFAULT_KEYSERVER_PORT));
+        ctx->keyserver_port = strdup(DEFAULT_KEYSERVER_PORT_STR);
         reset_addr_info = true;
     }
 
-    if (reset_addr_info && ctx->addr_info_init) {
-        free(ctx->addr_info.ai_addr);
-        ctx->addr_info_init = false;
+    if (reset_addr_info && ctx->keyserver_fd > -1) {
+        close(ctx->keyserver_fd);
+        ctx->keyserver_fd = -1;
     }
 }

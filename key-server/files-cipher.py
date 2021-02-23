@@ -71,9 +71,6 @@ schema_key = {
   "items": {
     "type": "object",
     "properties": {
-      "counter": {
-        "type": "string"
-      },
       "key": {
         "type": "string"
       },
@@ -87,7 +84,6 @@ schema_key = {
       }
     },
     "required": [
-      "counter",
       "key",
       "perms",
       "ident"
@@ -134,10 +130,7 @@ def convert_json(p, pretty=False):
 
 def cipher_and_write(content, output_dir):
     key = secrets.token_bytes(16)
-    counter = secrets.token_bytes(12) + b'\x00\x00\x00\x00'
-    c = struct.unpack('>QQ', counter)
-    int_counter = c[1] | (c[0] << 64)
-    obj = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=int_counter))
+    obj = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=1))
     c_content = obj.encrypt(content)
 
     content_sha = sha256(c_content).digest().hex()
@@ -146,21 +139,18 @@ def cipher_and_write(content, output_dir):
     with open(os.path.join(output_dir, output_name), 'wb') as f:
         f.write(c_content)
 
-    return output_name, key, counter
+    return output_name, key
 
 def decode_file(name, ident, keys, output_dir):
-    counter = bytes.fromhex(keys[ident]['counter'])
     key = bytes.fromhex(keys[ident]['key'])
-    assert len(key) == 16 and len(counter) == 16
+    assert len(key) == 16
 
     with open(os.path.join(output_dir, name), 'rb') as f:
         content = f.read()
 
     assert sha256(content).digest().hex() + ".enc" == name
 
-    c = struct.unpack('>QQ', counter)
-    int_counter = c[1] | (c[0] << 64)
-    obj = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=int_counter))
+    obj = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=1))
     plain = obj.decrypt(content)
     return plain
 
@@ -208,7 +198,7 @@ class Dir:
         for dname, d in self.subdir.items():
             content = d.gen_index(keys, output_dir)
 
-            name, key, counter = cipher_and_write(content.encode('utf8'), output_dir)
+            name, key = cipher_and_write(content.encode('utf8'), output_dir)
 
             ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
             while keys.get(ident, None) != None:
@@ -216,7 +206,6 @@ class Dir:
 
             keys[ident] = {
                 "key": key.hex(),
-                "counter": counter.hex(),
                 "perms": d.max_perm
             }
             self.file.append( {
@@ -239,7 +228,7 @@ def run(conf, input_dir, output_dir):
         with open(os.path.join(input_dir, e["name"]), 'rb') as f:
             content = f.read()
 
-        name, key, counter = cipher_and_write(content, output_dir)
+        name, key = cipher_and_write(content, output_dir)
 
         ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
         while keys.get(ident, None) != None:
@@ -252,7 +241,6 @@ def run(conf, input_dir, output_dir):
 
         keys[ident] = {
             "key": key.hex(),
-            "counter": counter.hex(),
             "perms": perm
         }
 

@@ -51,8 +51,8 @@ NO_EXPORT MediaResp open_index(struct Context* ctx, struct MediaDir* index);
 NO_EXPORT MediaResp open_dir(struct Context* ctx, struct MediaDir* dir);
 
 // if *fd < 1, a temporary file will be allocate
-NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned char *key, unsigned char *counter);
-NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remote_name, unsigned char *key, unsigned char *counter, int* fd);
+NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned char *key);
+NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remote_name, unsigned char *key, int* fd);
 NO_EXPORT MediaResp download_file(struct Context* ctx, struct MediaFile* file, int* fd);
 
 NO_EXPORT void close_dir(struct MediaDir* dir);

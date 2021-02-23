@@ -12,7 +12,7 @@ endif()
 
 #add_compile_options("-fsanitize=address")
 #link_libraries("-fsanitize=address")
-link_libraries("-s")
+#link_libraries("-s")
 
 add_executable(client_tester)
 add_executable(client_shell)

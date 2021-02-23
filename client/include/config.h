@@ -1,6 +1,9 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
 
+#define STR_(name) #name
+#define STR_NAME(name) STR_(name)
+
 #define DEFAULT_BASE_URL "http://127.0.0.1:8080"
 
 // WHITEBOX GEN API
@@ -15,12 +18,11 @@
 // KEY SERVER URL
 #define DEFAULT_KEYSERVER_ADDRESS "127.0.0.1"
 #define DEFAULT_KEYSERVER_PORT 65430
-#define str(a) #a
+
+#define DEFAULT_KEYSERVER_PORT_STR STR_NAME(DEFAULT_KEYSERVER_PORT)
 
 #include <stdbool.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <netdb.h>
 
 #ifdef HTTP_WITH_VLC
@@ -33,8 +35,7 @@
 struct Context {
     char* keyserver_addr;
     char* keyserver_port;
-    struct addrinfo addr_info;
-    bool addr_info_init;
+    int keyserver_fd;
 
     char* base_addr;
     char* currentlogin;
@@ -49,6 +50,7 @@ struct Context {
 #ifdef HTTP_WITH_VLC
     stream_t* vlc_obj;
     vlc_mutex_t read_mutex;
+    bool stop_download;
 #endif
 };
 

@@ -42,13 +42,13 @@ def VM_decode(payload, master_key):
     return c1.decrypt(cipher)
 
 
-def reqCheck(sock, address, m, ctx):
-    if len(m) < 21:
+def reqCheck(sock, address, ctx):
+    payload = sock.recv(20)
+    if len(payload) != 20:
         print("reqCheck REQUEST_ERROR")
         sock.send(bytes([RespType.REQUEST_ERROR.value]))
         return
 
-    payload = m[1:21]
     ts = struct.unpack('<I', payload[16:])[0]
     current_ts = int(datetime.datetime.now().timestamp())
 
@@ -65,13 +65,13 @@ def reqCheck(sock, address, m, ctx):
         sock.send(bytes([RespType.CHECK_EXPIRED.value]) + plain)
     return
 
-def reqGetKey(sock, address, m, ctx):
-    if len(m) < 21:
+def reqGetKey(sock, address, ctx):
+    payload = sock.recv(20)
+    if len(payload) != 20:
         print("reqGetKey REQUEST_ERROR")
         sock.send(bytes([RespType.REQUEST_ERROR.value]))
         return
 
-    payload = m[1:21]
     ts = struct.unpack('<I', payload[16:])[0]
     current_ts = int(datetime.datetime.now().timestamp())
 
@@ -100,34 +100,39 @@ def reqGetKey(sock, address, m, ctx):
         return
 
     print("reqGetKey GETKEY_OK {} with perm {}".format(ident, perm))
-    sock.send(bytes([RespType.GETKEY_OK.value]) + bytes.fromhex(ctx["keys"][ident]["key"]) + bytes.fromhex(ctx["keys"][ident]["counter"]))
+    sock.send(bytes([RespType.GETKEY_OK.value]) + bytes.fromhex(ctx["keys"][ident]["key"]))
 
     return
 
 def process_main(sock, address, ctx):
-    m = sock.recv(512)
-    if len(m) < 1:
-        sock.send(bytes([RespType.REQUEST_ERROR.value]))
-        sock.close()
-        return
-
-    req = int(m[0])
     try:
-        reqType = ReqType(req)
-    except ValueError:
-        print("process_main REQUEST_ERROR unknown reqType")
-        sock.send(bytes([RespType.REQUEST_ERROR.value]))
-        sock.close()
-        return
+        print("Begin connexion {}".format(address))
+        sock.send(b'STIC');
+        while True:
+            m = sock.recv(1)
+            if len(m) < 1:
+                sock.send(bytes([RespType.REQUEST_ERROR.value]))
+                sock.close()
+                return
 
-    if reqType == ReqType.CHECK:
-        reqCheck(sock, address, m, ctx)
-    elif reqType == ReqType.GETKEY:
-        reqGetKey(sock, address, m, ctx)
-    else:
-        print("process_main REQUEST_ERROR no handler for reqType {}".format(reqType))
-        sock.send(bytes([RespType.REQUEST_ERROR.value]))
-    sock.close()
+            req = int(m[0])
+            try:
+                reqType = ReqType(req)
+            except ValueError:
+                print("process_main REQUEST_ERROR unknown reqType")
+                sock.send(bytes([RespType.REQUEST_ERROR.value]))
+                continue
+
+            if reqType == ReqType.CHECK:
+                reqCheck(sock, address, ctx)
+            elif reqType == ReqType.GETKEY:
+                reqGetKey(sock, address, ctx)
+            else:
+                print("process_main REQUEST_ERROR no handler for reqType {}".format(reqType))
+                sock.send(bytes([RespType.REQUEST_ERROR.value]))
+    finally:
+        print("End connexion {}".format(address))
+        sock.close()
 
 def worker(sock, ctx):
     cont = True

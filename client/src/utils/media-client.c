@@ -117,7 +117,7 @@ curlError:
 
 #else
 
-#define BLOCK_SIZE 262144
+#define BLOCK_SIZE (1<<16)
 
 static inline MediaResp download_media(struct Context* ctx, const char* name, struct write_data *cb_data) {
     char* url;
@@ -144,7 +144,15 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
             crypto_stream_aes128ctr_xor(buffer, buffer, recv_size, cb_data->counter, cb_data->key);
             store32_bigendian(&cb_data->counter[12], (recv_size >> 4) + load32_bigendian(&cb_data->counter[12]));
         }
+
         vlc_mutex_lock(&ctx->read_mutex);
+
+        if(ctx->stop_download) {
+            vlc_mutex_unlock(&ctx->read_mutex);
+            vlc_stream_Delete(stream);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+
         write(cb_data->fd, buffer, recv_size);
         vlc_mutex_unlock(&ctx->read_mutex);
 
@@ -207,7 +215,7 @@ static MediaResp download_root(struct Context* ctx, void** out, size_t* size) {
     return r;
 }
 
-NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned char *key, unsigned char *counter) {
+NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned char *key) {
     int retry = 2;
     KeyResp rkey;
 
@@ -223,7 +231,7 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
             }
         }
 
-        rkey = getkey(ctx, &token, key, counter);
+        rkey = getkey(ctx, &token, key);
         if (rkey != RESP_GETKEY_EXPIRED) {
             retry = -1;
         } else {
@@ -244,17 +252,19 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
         } else if (rkey == RESP_GETKEY_UNKNOW) {
             return MEDIA_UNKNOW;
         } else {
+            fprintf(stderr, "Unexpected %d\n", rkey);
             return MEDIA_UNEXPECTED_ERROR;
         }
     }
     return MEDIA_OK;
 }
 
-NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remote_name, unsigned char *key, unsigned char *counter, int* fd) {
+NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remote_name, unsigned char *key, int* fd) {
+    static unsigned char default_counter[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
     struct write_data cb_data = {0};
     cb_data.decode = true;
     memcpy(cb_data.key, key, 16);
-    memcpy(cb_data.counter, counter, 16);
+    memcpy(cb_data.counter, default_counter, 16);
 
     if (*fd < 1) {
         *fd = create_tmp_file();
@@ -277,13 +287,12 @@ NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remo
 
 static MediaResp download_ident(struct Context* ctx, const char* name, uint64_t ident, int* fd) {
     unsigned char key[16] = {0};
-    unsigned char counter[16] = {0};
 
-    MediaResp r = get_file_key(ctx, ident, key, counter);
+    MediaResp r = get_file_key(ctx, ident, key);
     if (r != MEDIA_OK) {
         return r;
     }
-    return download_file_with_key(ctx, name, key, counter, fd);
+    return download_file_with_key(ctx, name, key, fd);
 }
 
 static void erase_file(struct MediaFile* file) {
@@ -618,7 +627,7 @@ static inline char* alloc_next_path(const char *path, const char** out) {
     do {
         c = path[path_index];
 
-        if (c == '\0' || c == EOF) {
+        if (c == '\0' || c == EOF || c == '?') {
             stop = true;
         } else if (c == '/') {
             if (current_index != 0) {
@@ -672,7 +681,7 @@ static inline char** path_parse(const char* path) {
     }
     path_list[current_element] = NULL;
 
-    while (*current_position != '\0') {
+    while (*current_position != '\0' && *current_position != '?') {
         if (current_element + 1 >= max_element) {
             max_element += 4;
             path_list = realloc(path_list, sizeof(char*) * max_element);

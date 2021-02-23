@@ -17,15 +17,15 @@
 //static struct addrinfo addr_info = {0};
 //static bool addr_info_init = false;
 
-static KeyResp send_recv(struct Context* ctx, const char* in, size_t in_size, char* out, size_t *out_size) {
-    int fd = -1;
+static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, char* out, size_t *out_size) {
     if (ctx == NULL) {
         return RESP_INTERNAL_ERROR;
     }
 
-    if (!ctx->addr_info_init) {
+    if (ctx->keyserver_fd <= -1) {
         struct addrinfo hints = {0};
         struct addrinfo *result, *rp;
+        ctx->keyserver_fd = -1;
 
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
@@ -39,69 +39,71 @@ static KeyResp send_recv(struct Context* ctx, const char* in, size_t in_size, ch
         }
 
         for (rp = result; rp != NULL; rp = rp->ai_next) {
-            fd = socket(rp->ai_family, rp->ai_socktype,
+            ctx->keyserver_fd = socket(rp->ai_family, rp->ai_socktype,
                         rp->ai_protocol);
-            if (fd == -1) {
+            if (ctx->keyserver_fd == -1) {
                 continue;
             }
 
-            if (connect(fd, rp->ai_addr, rp->ai_addrlen) != -1) {
+            if (connect(ctx->keyserver_fd, rp->ai_addr, rp->ai_addrlen) != -1) {
                 break;
             }
 
-            close(fd);
-            fd = -1;
+            close(ctx->keyserver_fd);
+            ctx->keyserver_fd = -1;
         }
 
-        if (rp == NULL) {
+        if (rp == NULL || ctx->keyserver_fd == -1) {
             freeaddrinfo(result);
             fprintf(stderr, "Could not connect\n");
             return RESP_INTERNAL_ERROR;
         }
-
-        ctx->addr_info.ai_addr = malloc(rp->ai_addrlen);
-        if (ctx->addr_info.ai_addr == NULL) {
-            freeaddrinfo(result);
-            fprintf(stderr, "malloc error\n");
-            return RESP_INTERNAL_ERROR;
-        }
-        memcpy(ctx->addr_info.ai_addr, rp->ai_addr, rp->ai_addrlen);
-        ctx->addr_info.ai_family = rp->ai_family;
-        ctx->addr_info.ai_socktype = rp->ai_socktype;
-        ctx->addr_info.ai_protocol = rp->ai_protocol;
-        ctx->addr_info.ai_addrlen = rp->ai_addrlen;
 
         freeaddrinfo(result);
-        ctx->addr_info_init = true;
-    } else {
-        fd = socket(ctx->addr_info.ai_family, ctx->addr_info.ai_socktype, ctx->addr_info.ai_protocol);
-        if (fd == -1) {
-            fprintf(stderr, "socket error\n");
-            return RESP_INTERNAL_ERROR;
-        }
 
-        if (connect(fd, ctx->addr_info.ai_addr, ctx->addr_info.ai_addrlen) == -1) {
-            fprintf(stderr, "Could not connect\n");
-            close(fd);
+        char header[4] = {0};
+        s = recv(ctx->keyserver_fd, header, sizeof(header), MSG_WAITALL);
+        if (s != sizeof(header) || strncmp(header, "STIC", sizeof(header)) != 0) {
+            close(ctx->keyserver_fd);
+            ctx->keyserver_fd = -1;
             return RESP_INTERNAL_ERROR;
         }
     }
 
-    int s = send(fd, in, in_size, 0);
+    int s = send(ctx->keyserver_fd, in, in_size, 0);
     if (s != in_size) {
-        close(fd);
+        close(ctx->keyserver_fd);
+        ctx->keyserver_fd = -1;
         return RESP_INTERNAL_ERROR;
     }
 
-    s = recv(fd, out, *out_size, MSG_WAITALL);
-    close(fd);
+    s = recv(ctx->keyserver_fd, out, *out_size, MSG_WAITALL);
     if (s <= 0) {
-        *out_size = 0;
+        close(ctx->keyserver_fd);
+        ctx->keyserver_fd = -1;
         return RESP_INTERNAL_ERROR;
     }
 
     *out_size = s;
     return out[0];
+}
+
+static KeyResp send_recv(struct Context* ctx, const char* in, size_t in_size, char* out, size_t *out_size) {
+    if (ctx == NULL) {
+        return RESP_INTERNAL_ERROR;
+    }
+    // if a connection is already opened, a error may occured if the server close the connexion. Retry with a new connexion
+    if (ctx->keyserver_fd > -1) {
+        KeyResp r = send_recv_(ctx, in, in_size, out, out_size);
+        if (r != RESP_INTERNAL_ERROR) {
+            return r;
+        }
+        if (ctx->keyserver_fd > -1) {
+            close(ctx->keyserver_fd);
+        }
+        ctx->keyserver_fd = -1;
+    }
+    return send_recv_(ctx, in, in_size, out, out_size);
 }
 
 KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* plain) {
@@ -126,9 +128,9 @@ KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* 
     }
 }
 
-KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key, unsigned char* counter) {
+KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key) {
     char in_msg[1 + sizeof(struct vmsign)] = {0};
-    char out_msg[1 + 16 + 16] = {0};
+    char out_msg[1 + 16] = {0};
     size_t out_msg_size = sizeof(out_msg);
 
     in_msg[0] = REQ_GETKEY;
@@ -138,7 +140,6 @@ KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key, 
     KeyResp r = send_recv(ctx, in_msg, sizeof(in_msg), out_msg, &out_msg_size);
     if (r == RESP_GETKEY_OK && out_msg_size == sizeof(out_msg)) {
         memcpy(key, &out_msg[1], 16);
-        memcpy(counter, &out_msg[17], 16);
         return r;
     } else if (r == RESP_GETKEY_EXPIRED || r == RESP_GETKEY_INVALID_PERMS || r == RESP_GETKEY_UNKNOW || r >= RESP_ERROR_CODE) {
         fprintf(stderr, "send_recv return %u\n", r);

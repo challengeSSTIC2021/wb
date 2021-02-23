@@ -16,6 +16,7 @@
 #include <vlc_interface.h>
 #include <vlc_services_discovery.h>
 #include <vlc_dialog.h>
+#include <vlc_url.h>
 
 #include "config.h"
 #include "wb_loader.h"
@@ -124,7 +125,6 @@ struct access_sys_t {
     struct MediaFile* file;
     int fd;
     unsigned char key[16];
-    unsigned char counter[16];
     uint64_t seek_position;
     bool download_finish;
     vlc_thread_t thread;
@@ -268,6 +268,7 @@ static int OpenAccess( vlc_object_t* access_this) {
     p_sys->dir = NULL;
     p_sys->file = NULL;
     MediaResp mr;
+    msg_Info(p_access, "Look for %s", p_access->psz_location);
     if (p_access->psz_location[0] == '\0' || p_access->psz_location[strlen(p_access->psz_location) - 1] == '/') {
         p_sys->is_dir = true;
         mr = get_dir(&global_ctx.ctx, &global_ctx.root_index, p_access->psz_location, &p_sys->dir);
@@ -287,7 +288,7 @@ static int OpenAccess( vlc_object_t* access_this) {
         return VLC_EGENERIC;
     }
     if (!p_sys->is_dir) {
-        mr = get_file_key(&global_ctx.ctx, p_sys->file->ident, p_sys->key, p_sys->counter);
+        mr = get_file_key(&global_ctx.ctx, p_sys->file->ident, p_sys->key);
         if (mr != MEDIA_OK) {
             release_context();
             error_Media(mr, p_access, (p_access->psz_url != NULL) ? p_access->psz_url : p_access->psz_location);
@@ -321,6 +322,10 @@ static void CloseAccess( vlc_object_t* access_this) {
     access_sys_t *p_sys = p_access->p_sys;
 
     if (!p_sys->is_dir) {
+        vlc_mutex_lock(&p_sys->tctx.read_mutex);
+        p_sys->tctx.stop_download = true;
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+
         vlc_join( p_sys->thread, NULL );
 
         if (p_sys->fd > 0) {
@@ -337,12 +342,12 @@ static void *DownloadAccess(void* data) {
 
     access_sys_t *p_sys = (access_sys_t*) data;
 
-    p_sys->r = download_file_with_key(&p_sys->tctx, p_sys->file->remote_name, p_sys->key, p_sys->counter, &p_sys->fd);
-    if (p_sys->fd != -1) {
-        lseek(p_sys->fd, 0, SEEK_SET);
-    }
-    msg_Info(p_sys->parent, "Finish download");
+    p_sys->r = download_file_with_key(&p_sys->tctx, p_sys->file->remote_name, p_sys->key, &p_sys->fd);
     vlc_mutex_lock(&p_sys->tctx.read_mutex);
+    if (p_sys->tctx.stop_download) {
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+        return NULL;
+    }
     lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
     p_sys->download_finish = true;
     vlc_mutex_unlock(&p_sys->tctx.read_mutex);
@@ -353,23 +358,31 @@ static int AccessSeek(stream_t *p_access, uint64_t pos) {
     access_sys_t *p_sys = p_access->p_sys;
 
     vlc_mutex_lock(&p_sys->tctx.read_mutex);
-    if (p_sys->download_finish) {
+    if (p_sys->tctx.stop_download) {
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+        return VLC_EGENERIC;
+    } else if (p_sys->download_finish) {
         if (lseek(p_sys->fd, pos, SEEK_SET) != pos) {
+            vlc_mutex_unlock(&p_sys->tctx.read_mutex);
             return VLC_EGENERIC;
         }
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
         return VLC_SUCCESS;
     } else {
         p_sys->seek_position = pos;
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
         return VLC_SUCCESS;
     }
-    vlc_mutex_unlock(&p_sys->tctx.read_mutex);
 }
 
 static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
     access_sys_t *p_sys = p_access->p_sys;
 
     vlc_mutex_lock(&p_sys->tctx.read_mutex);
-    if (p_sys->download_finish) {
+    if (p_sys->tctx.stop_download) {
+        vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+        return 0;
+    } else if (p_sys->download_finish) {
         ssize_t read_len = read(p_sys->fd, buf, size);
         vlc_mutex_unlock(&p_sys->tctx.read_mutex);
         if (read_len < 0) {
@@ -381,7 +394,7 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
             vlc_mutex_unlock(&p_sys->tctx.read_mutex);
             return -1;
         }
-        uint64_t pos = lseek(p_sys->fd, 0, SEEK_END);
+        uint64_t pos = lseek(p_sys->fd, 0, SEEK_CUR);
         // check if the position is already feed
         if (p_sys->seek_position > pos) {
             vlc_mutex_unlock(&p_sys->tctx.read_mutex);
@@ -389,7 +402,7 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
         }
         lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
         ssize_t read_len = read(p_sys->fd, buf, size);
-        lseek(p_sys->fd, 0, SEEK_END);
+        lseek(p_sys->fd, pos, SEEK_SET);
         p_sys->seek_position += read_len;
         vlc_mutex_unlock(&p_sys->tctx.read_mutex);
 
@@ -406,9 +419,9 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
 static int AccessControl(stream_t *p_access, int query, va_list args) {
     switch (query) {
         case STREAM_CAN_SEEK:
-        case STREAM_CAN_FASTSEEK:
             *va_arg(args, bool *) = true;
             break;
+        case STREAM_CAN_FASTSEEK:
         case STREAM_CAN_PAUSE:
         case STREAM_CAN_CONTROL_PACE:
             *va_arg(args, bool *) = false;
@@ -435,15 +448,24 @@ static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
             vlc_readdir_helper_finish(&rdh, false);
             return VLC_ENOMEM;
         }
-        char* full_path;
-        if (asprintf(&full_path, PREFIX_SERVICE "://%s", path) == -1) {
+        char* encode_remote = vlc_uri_encode(p_sys->dir->files[i].remote_name);
+        if (encode_remote == NULL) {
             free(path);
             vlc_readdir_helper_finish(&rdh, false);
             return VLC_ENOMEM;
         }
+        char* full_path;
+        if (asprintf(&full_path, PREFIX_SERVICE "://%s?id=%lu&remote_name=%s", path, p_sys->dir->files[i].ident, encode_remote) == -1) {
+            free(path);
+            free(encode_remote);
+            vlc_readdir_helper_finish(&rdh, false);
+            return VLC_ENOMEM;
+        }
 
+        msg_Info(p_access, "Add File %s", full_path);
         vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->files[i].name, ITEM_TYPE_FILE, ITEM_NET_UNKNOWN);
         free(path);
+        free(encode_remote);
         free(full_path);
     }
 
@@ -454,15 +476,24 @@ static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
             vlc_readdir_helper_finish(&rdh, false);
             return VLC_ENOMEM;
         }
-        char* full_path;
-        if (asprintf(&full_path, PREFIX_SERVICE "://%s", path) == -1) {
+        char* encode_remote = vlc_uri_encode(p_sys->dir->subdir[i].remote_name);
+        if (encode_remote == NULL) {
             free(path);
             vlc_readdir_helper_finish(&rdh, false);
             return VLC_ENOMEM;
         }
+        char* full_path;
+        if (asprintf(&full_path, PREFIX_SERVICE "://%s?id=%lu&remote_name=%s", path, p_sys->dir->subdir[i].ident, encode_remote) == -1) {
+            free(path);
+            free(encode_remote);
+            vlc_readdir_helper_finish(&rdh, false);
+            return VLC_ENOMEM;
+        }
 
+        msg_Info(p_access, "Add directory %s", full_path);
         vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->subdir[i].name, ITEM_TYPE_DIRECTORY, ITEM_NET_UNKNOWN);
         free(path);
+        free(encode_remote);
         free(full_path);
     }
 

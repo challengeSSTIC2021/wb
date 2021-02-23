@@ -25,6 +25,6 @@ typedef enum {
 } KeyResp;
 
 NO_EXPORT KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* plain);
-NO_EXPORT KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key, unsigned char* counter);
+NO_EXPORT KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key);
 
 #endif
