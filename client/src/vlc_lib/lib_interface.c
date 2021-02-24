@@ -363,7 +363,6 @@ static void *DownloadAccess(void* data) {
 
 static int AccessSeek(stream_t *p_access, uint64_t pos) {
     access_sys_t *p_sys = p_access->p_sys;
-    //return VLC_EGENERIC;
 
     vlc_mutex_lock(&p_sys->tctx.read_mutex);
     if (p_sys->tctx.stop_download) {
@@ -426,15 +425,17 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
 static int AccessControl(stream_t *p_access, int query, va_list args) {
     switch (query) {
         case STREAM_CAN_SEEK:
+        case STREAM_CAN_PAUSE:
+        case STREAM_CAN_CONTROL_PACE:
             *va_arg(args, bool *) = true;
             break;
         case STREAM_CAN_FASTSEEK:
-        case STREAM_CAN_PAUSE:
-        case STREAM_CAN_CONTROL_PACE:
             *va_arg(args, bool *) = false;
             break;
         case STREAM_GET_PTS_DELAY:
-            *va_arg(args, int64_t *) = INT64_C(100000) * var_InheritInteger(p_access, "network-caching");
+            *va_arg(args, int64_t *) = INT64_C(1000) * var_InheritInteger(p_access, "network-caching");
+            break;
+        case STREAM_SET_PAUSE_STATE:
             break;
         default:
             return VLC_EGENERIC;
