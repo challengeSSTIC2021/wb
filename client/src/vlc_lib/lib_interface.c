@@ -357,7 +357,6 @@ static void *DownloadAccess(void* data) {
     }
     lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
     p_sys->download_finish = true;
-    vlc_cond_broadcast(&p_sys->tctx.read_cond);
     vlc_mutex_unlock(&p_sys->tctx.read_mutex);
     return NULL;
 }
@@ -399,31 +398,14 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
         }
         return read_len;
     } else {
-        uint64_t pos = 0;
-        bool can_read = false;
-        mutex_cleanup_push(&p_sys->tctx.read_mutex);
-        while ( !can_read ) {
-            if (p_sys->tctx.stop_download) {
-                can_read = true;
-            } else {
-                if (p_sys->download_finish) {
-                    can_read = true;
-                }
-                if (p_sys->fd != -1) {
-                    pos = lseek(p_sys->fd, 0, SEEK_CUR);
-                }
-                if (p_sys->seek_position < pos) {
-                    can_read = true;
-                }
-                if (!can_read) {
-                    vlc_cond_wait(&p_sys->tctx.read_cond, &p_sys->tctx.read_mutex);
-                }
-            }
-        }
-        vlc_cleanup_pop();
-        if (p_sys->tctx.stop_download) {
+        if (p_sys->fd == -1) {
             vlc_mutex_unlock(&p_sys->tctx.read_mutex);
-            return 0;
+            return -1;
+        }
+        uint64_t pos = lseek(p_sys->fd, 0, SEEK_CUR);
+        if (p_sys->seek_position >= pos) {
+            vlc_mutex_unlock(&p_sys->tctx.read_mutex);
+            return -1;
         }
         lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
         ssize_t read_len = read(p_sys->fd, buf, size);
@@ -431,7 +413,10 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
         p_sys->seek_position += read_len;
         vlc_mutex_unlock(&p_sys->tctx.read_mutex);
 
-        if (read_len <= 0) {
+        if (read_len == 0) {
+            return -1;
+        }
+        if (read_len < 0) {
             return 0;
         }
         return read_len;

@@ -20,7 +20,6 @@ void freeContext(struct Context* ctx) {
     free(ctx->currentpassword);
     free(ctx->base_addr);
 #ifdef HTTP_WITH_VLC
-    vlc_cond_destroy(&ctx->read_cond);
     vlc_mutex_destroy(&ctx->read_mutex);
 #endif
     memset(ctx, '\0', sizeof(struct Context));
@@ -41,7 +40,6 @@ void initContext(struct Context* ctx, char* base_url, char* key_server_url, char
     ctx->stop_download = false;
 
     vlc_mutex_init(&ctx->read_mutex);
-    vlc_cond_init(&ctx->read_cond);
 #endif
     setContext(ctx, base_url, key_server_url, key_server_port);
 }

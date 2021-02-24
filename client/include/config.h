@@ -50,7 +50,6 @@ struct Context {
 #ifdef HTTP_WITH_VLC
     stream_t* vlc_obj;
     vlc_mutex_t read_mutex;
-    vlc_cond_t read_cond;
     bool stop_download;
 #endif
 };

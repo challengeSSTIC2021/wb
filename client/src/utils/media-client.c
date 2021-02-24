@@ -217,7 +217,6 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, un
         }
 
         write(cb_data->fd, buffer, recv_size);
-        vlc_cond_broadcast(&ctx->read_cond);
         vlc_mutex_unlock(&ctx->read_mutex);
 
     } while (!stop);
