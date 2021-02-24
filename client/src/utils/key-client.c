@@ -18,7 +18,7 @@
 //static bool addr_info_init = false;
 
 static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, char* out, size_t *out_size) {
-    if (ctx == NULL) {
+    if (ctx == NULL || out == NULL || *out_size < 1) {
         return RESP_INTERNAL_ERROR;
     }
 
@@ -77,15 +77,25 @@ static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, c
         ctx->keyserver_fd = -1;
         return RESP_INTERNAL_ERROR;
     }
+    s = recv(ctx->keyserver_fd, out, 1, MSG_WAITALL);
 
-    s = recv(ctx->keyserver_fd, out, *out_size, MSG_WAITALL);
-    if (s <= 0) {
+    size_t l = KeyResp_len(out[0]);
+    if (l == 0 || *out_size < l) {
         close(ctx->keyserver_fd);
         ctx->keyserver_fd = -1;
         return RESP_INTERNAL_ERROR;
     }
 
-    *out_size = s;
+    if (l > 1) {
+        s = recv(ctx->keyserver_fd, out + 1, *out_size - 1, MSG_WAITALL);
+        if (s <= 0) {
+            close(ctx->keyserver_fd);
+            ctx->keyserver_fd = -1;
+            return RESP_INTERNAL_ERROR;
+        }
+    }
+
+    *out_size = l;
     return out[0];
 }
 
@@ -142,7 +152,7 @@ KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key) 
     if (r == RESP_GETKEY_OK && out_msg_size == sizeof(out_msg)) {
         memcpy(key, &out_msg[1], 16);
         return r;
-    } else if (r == RESP_GETKEY_EXPIRED || r == RESP_GETKEY_INVALID_PERMS || r == RESP_GETKEY_UNKNOW || r >= RESP_ERROR_CODE) {
+    } else if (r == RESP_GETKEY_EXPIRED || r == RESP_GETKEY_INVALID_PERMS || r == RESP_GETKEY_UNKNOW || r == RESP_GETKEY_DEBUG_DEVICE || r >= RESP_ERROR_CODE) {
         fprintf(stderr, "send_recv return %u\n", r);
         return r;
     } else {

@@ -26,6 +26,7 @@ class RespType(IntEnum):
     GETKEY_EXPIRED = 4
     GETKEY_INVALID_PERMS = 5
     GETKEY_UNKNOW = 6
+    GETKEY_DEBUG_DEVICE = 7
     REQUEST_ERROR = 0xfe
     UNEXPECTED_ERROR = 0xff
 
@@ -88,6 +89,11 @@ def reqGetKey(sock, address, ctx):
         return
 
     ident, perm = struct.unpack('<QQ', plain)
+
+    if ((ident >> 63) & 1) != 0 and not ctx["prod"]:
+        print("reqGetKey GETKEY_DEBUG_DEVICE")
+        sock.send(bytes([RespType.GETKEY_DEBUG_DEVICE.value]))
+        return
 
     if ident not in ctx["keys"]:
         print("reqGetKey GETKEY_UNKNOW")
@@ -167,6 +173,7 @@ def main():
     parser.add_argument("-k", "--key-file", type=str, help="key files", default="keys.json")
     parser.add_argument("-w", "--workers", type=int, help="worker", default=16)
     parser.add_argument("-l", "--listen-port", type=int, help="listening port", default=65430)
+    parser.add_argument("-p", "--prod", action='store_true')
 
     args = parser.parse_args()
 
@@ -182,7 +189,8 @@ def main():
     context = {
         "keys": keys,
         "master-key": args.master_key,
-        "timeout": args.timeout
+        "timeout": args.timeout,
+        "prod": args.prod
     }
 
     sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)

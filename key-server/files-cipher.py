@@ -27,6 +27,9 @@ schema_input = {
           "type": {
             "type": "string"
           },
+          "prod": {
+            "type": "boolean"
+          },
           "guest": {
             "type": "null"
           }
@@ -49,6 +52,9 @@ schema_input = {
           },
           "type": {
             "type": "string"
+          },
+          "prod": {
+            "type": "boolean"
           },
           "perms": {
             "type": "integer",
@@ -154,15 +160,26 @@ def decode_file(name, ident, keys, output_dir):
     plain = obj.decrypt(content)
     return plain
 
+def gen_ident(keys, need_prod=False):
+    while True:
+        ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
+        if need_prod:
+            ident |= (1<<63)
+        else:
+            ident &= ((1<<63) - 1)
+        if ident not in keys:
+            return ident
+
 class Dir:
 
     def __init__(self):
         self.max_perm = 0
+        self.prod_only = True
         self.subdir = {}
         self.file = []
         self.names = []
 
-    def append(self, info, path):
+    def append(self, info, path, need_prod):
         path = os.path.normpath(path)
         pathl = []
         while '/' in path:
@@ -170,11 +187,12 @@ class Dir:
             pathl = [t] + pathl
         if path not in ["", "."]:
             pathl = [path] + pathl
-        self._append(info, pathl)
+        self._append(info, pathl, need_prod)
 
-    def _append(self, info, path):
+    def _append(self, info, path, need_prod):
 
         self.max_perm = max(self.max_perm, struct.unpack('>Q', bytes.fromhex(info["perms"]))[0])
+        self.prod_only &= need_prod
 
         if path == []:
             assert info["real_name"] not in self.names
@@ -191,7 +209,7 @@ class Dir:
             self.names.append(d)
             self.subdir[d] = Dir()
 
-        self.subdir[d]._append(info, path[1:])
+        self.subdir[d]._append(info, path[1:], need_prod)
 
     def gen_index(self, keys, output_dir):
 
@@ -200,9 +218,7 @@ class Dir:
 
             name, key = cipher_and_write(content.encode('utf8'), output_dir)
 
-            ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
-            while keys.get(ident, None) != None:
-                ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
+            ident = gen_ident(keys, d.prod_only)
 
             keys[ident] = {
                 "key": key.hex(),
@@ -230,14 +246,14 @@ def run(conf, input_dir, output_dir):
 
         name, key = cipher_and_write(content, output_dir)
 
-        ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
-        while keys.get(ident, None) != None:
-            ident = struct.unpack('>Q', secrets.token_bytes(8))[0]
-
         if "guest" in e:
             perm = GUEST_PERM
         else:
             perm = e['perms']
+
+        need_prod = e.get('prod', False)
+
+        ident = gen_ident(keys, need_prod)
 
         keys[ident] = {
             "key": key.hex(),
@@ -250,7 +266,7 @@ def run(conf, input_dir, output_dir):
             "type": e["type"],
             "perms": struct.pack('>Q', perm).hex(),
             "ident": struct.pack('>Q', ident).hex()
-        }, os.path.normpath(e["outdir"]))
+        }, os.path.normpath(e["outdir"]), need_prod)
 
     root_index = root.gen_index(keys, output_dir)
 
@@ -260,7 +276,7 @@ def run(conf, input_dir, output_dir):
     return keys
 
 
-def check_file(entry, directory, plain, input_data, input_dir):
+def check_file(entry, directory, plain, input_data, input_dir, prod_only):
     found = None
 
     for i in range(len(input_dir)):
@@ -279,13 +295,16 @@ def check_file(entry, directory, plain, input_data, input_dir):
     else:
         assert int(entry['perms'], 16) == config_entry['perms']
 
+    # check prod_only
+    assert prod_only == config_entry.get('prod', False)
+
     # same content
     with open(os.path.join(input_dir, config_entry["name"]), 'rb') as f:
         assert f.read() == plain
 
     del input_data[i]
 
-def check(input_data, input_dir, keys, output_dir, index, current_dir=".", current_perms=GUEST_PERM):
+def check(input_data, input_dir, keys, output_dir, index, current_dir=".", current_perms=GUEST_PERM, prod_only=False):
 
     for entry in index:
         ident = int(entry['ident'], 16)
@@ -300,13 +319,16 @@ def check(input_data, input_dir, keys, output_dir, index, current_dir=".", curre
         assert current_perms >= eperm
         perm = min(current_perms, eperm)
 
+        # if the directory is prod_only, all file must be prod_only
+        assert (not prod_only) or (ident & (1<<63))
+
         if entry["type"] == "dir_index":
             nested_index = json.loads(plain.decode('utf8'))
             validate(instance=nested_index, schema=schema_index)
             nested_dir = os.path.join(current_dir, entry['real_name'])
-            check(input_data, input_dir, keys, output_dir, nested_index, nested_dir, perm)
+            check(input_data, input_dir, keys, output_dir, nested_index, nested_dir, perm, (ident & (1<<63)))
         else:
-            check_file(entry, current_dir, plain, input_data, input_dir)
+            check_file(entry, current_dir, plain, input_data, input_dir, (ident & (1<<63)) != 0)
 
     if current_dir == ".":
         # all input_file has been check

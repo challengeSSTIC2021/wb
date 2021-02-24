@@ -25,6 +25,23 @@ typedef enum {
     RESP_INTERNAL_ERROR = 0xffffffff,
 } KeyResp;
 
+static inline size_t KeyResp_len(KeyResp r) {
+    switch (r) {
+        default:
+            return 0;
+        case RESP_CHECK_OK:
+        case RESP_CHECK_EXPIRED:
+        case RESP_GETKEY_OK:
+            return 17;
+        case RESP_GETKEY_EXPIRED:
+        case RESP_GETKEY_INVALID_PERMS:
+        case RESP_GETKEY_UNKNOW:
+        case RESP_GETKEY_DEBUG_DEVICE:
+            return 1;
+    }
+}
+
+
 NO_EXPORT KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* plain);
 NO_EXPORT KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key);
 

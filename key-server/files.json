@@ -3,7 +3,14 @@
         "name": "user_file.txt",
         "outdir": "./user0",
         "type": "txt",
-        "perms": 1
+        "perms": 1,
+        "prod": true
+    }, {
+        "name": "sample.mp4",
+        "outdir": "./guest/prod",
+        "type": "mp4",
+        "prod": true,
+        "guest": null
     }, {
         "name": "guest_file.txt",
         "outdir": "./guest",

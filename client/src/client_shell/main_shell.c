@@ -201,6 +201,9 @@ static void cmd_list(struct Context* ctx, struct MediaDir* current_dir, const st
         case MEDIA_WRONG_PERMS:
             fprintf(stderr, "Cannot list %s: permission denied\n", path);
             return;
+        case MEDIA_DEBUG_DEVICE:
+            fprintf(stderr, "Cannot list %s: need prod device\n", path);
+            return;
         default:
             fprintf(stderr, "Cannot list %s: error %d\n", path, r);
             return;
@@ -239,6 +242,9 @@ static void cmd_get(struct Context* ctx, struct MediaDir* current_dir, const str
                 return;
             }
             break;
+        case MEDIA_DEBUG_DEVICE:
+            fprintf(stderr, "Cannot get %s: need prod device\n", cmd->args[1]);
+            return;
         case MEDIA_PATH_INVALID:
             fprintf(stderr, "Cannot get %s: invalid path\n", cmd->args[1]);
             return;
@@ -262,10 +268,17 @@ static void cmd_get(struct Context* ctx, struct MediaDir* current_dir, const str
         case MEDIA_WRONG_PERMS:
             fprintf(stderr, "Cannot get %s: permission denied\n", cmd->args[1]);
             close(fd);
+            unlink(cmd->args[2]);
+            return;
+        case MEDIA_DEBUG_DEVICE:
+            fprintf(stderr, "Cannot get %s: need prod device\n", cmd->args[1]);
+            close(fd);
+            unlink(cmd->args[2]);
             return;
         default:
             fprintf(stderr, "Cannot get %s: error %d\n", cmd->args[1], r);
             close(fd);
+            unlink(cmd->args[2]);
             return;
     }
 
@@ -413,6 +426,9 @@ int main(int argc, char** argv) {
                             break;
                         case MEDIA_WRONG_PERMS:
                             fprintf(stderr, "Cannot open %s: permission denied\n", cmdArgs.args[1]);
+                            break;
+                        case MEDIA_DEBUG_DEVICE:
+                            fprintf(stderr, "Cannot open %s: need prod device\n", cmdArgs.args[1]);
                             break;
                         default:
                             fprintf(stderr, "Cannot open %s: error %d\n", cmdArgs.args[1], r);
