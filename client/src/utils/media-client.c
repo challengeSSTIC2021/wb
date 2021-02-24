@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <gcrypt.h>
 
 #include "cJSON.h"
 
@@ -20,20 +21,19 @@
 #include "key-client.h"
 #include "wb_loader.h"
 #include "config.h"
-#include "crypto_stream.h"
-#include "int128.h"
 
 struct write_data {
     int fd;
     bool decode;
-    unsigned char key[16];
-    unsigned char counter[16];
 
 #ifndef HTTP_WITH_VLC
+    gcry_cipher_hd_t h;
     unsigned char buffer[16];
     size_t buffer_used;
 #endif
 };
+
+static const unsigned char default_counter[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 
 #ifndef HTTP_WITH_VLC
 
@@ -45,17 +45,18 @@ static size_t decode_write_callback(char *ptr, size_t size, size_t nmemb, void *
         }
         unsigned char tmp[CURL_MAX_WRITE_SIZE + 16];
 
+        size_t real_size = size*nmemb + cb_data->buffer_used;
+        size_t l_uncipher = real_size - (real_size % 16);
+
         memcpy(tmp, cb_data->buffer, cb_data->buffer_used);
         memcpy(tmp + cb_data->buffer_used, ptr, size*nmemb);
 
-        size_t real_size = size*nmemb + cb_data->buffer_used;
-        size_t increment = real_size >> 4;
-        size_t l_uncipher = increment << 4;
-        crypto_stream_aes128ctr_xor(tmp, tmp, l_uncipher, cb_data->counter, cb_data->key);
-        store32_bigendian(&cb_data->counter[12], increment + load32_bigendian(&cb_data->counter[12]));
+        memcpy(cb_data->buffer, tmp + l_uncipher, real_size % 16);
+        cb_data->buffer_used = real_size % 16;
 
-        memcpy(cb_data->buffer, tmp + l_uncipher, real_size - l_uncipher);
-        cb_data->buffer_used = real_size - l_uncipher;
+        if (gcry_cipher_decrypt(cb_data->h, tmp, l_uncipher, NULL, 0) != GPG_ERR_NO_ERROR) {
+            return 0;
+        }
 
         if (write(cb_data->fd, tmp, l_uncipher) == l_uncipher) {
             return size*nmemb;
@@ -67,14 +68,34 @@ static size_t decode_write_callback(char *ptr, size_t size, size_t nmemb, void *
     }
 }
 
-static inline MediaResp download_media(struct Context* ctx, const char* name, struct write_data *cb_data) {
+static inline MediaResp download_media(struct Context* ctx, const char* name, unsigned char* key, struct write_data *cb_data) {
+    if (key == NULL && cb_data->decode) {
+        return MEDIA_UNEXPECTED_ERROR;
+    }
     char* url;
     if (asprintf(&url, "%s" FILES_API_SUF "%s", ctx->base_addr, name) == -1) {
         return MEDIA_UNEXPECTED_ERROR;
     }
+    if (cb_data->decode) {
+        if (gcry_cipher_open(&cb_data->h, GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_CTR, 0) != GPG_ERR_NO_ERROR) {
+            free(url);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+        if (gcry_cipher_setkey(cb_data->h, key, 16) != GPG_ERR_NO_ERROR) {
+            gcry_cipher_close(cb_data->h);
+            free(url);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+        if (gcry_cipher_setctr(cb_data->h, default_counter, 16) != GPG_ERR_NO_ERROR) {
+            gcry_cipher_close(cb_data->h);
+            free(url);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+    }
 
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
+        if (cb_data->decode) gcry_cipher_close(cb_data->h);
         free(url);
         return MEDIA_UNEXPECTED_ERROR;
     }
@@ -94,13 +115,22 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
     curl_easy_cleanup(curl);
 
     if (http_code != 200) {
+        if (cb_data->decode) gcry_cipher_close(cb_data->h);
         return MEDIA_UNKNOW;
     }
 
-    if (cb_data->decode && cb_data->buffer_used != 0) {
-        crypto_stream_aes128ctr_xor(cb_data->buffer, cb_data->buffer, cb_data->buffer_used, cb_data->counter, cb_data->key);
+    if (cb_data->decode) {
+        if (gcry_cipher_final(cb_data->h) != GPG_ERR_NO_ERROR) {
+            gcry_cipher_close(cb_data->h);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+        if (gcry_cipher_decrypt(cb_data->h, cb_data->buffer, cb_data->buffer_used, NULL, 0) != GPG_ERR_NO_ERROR) {
+            gcry_cipher_close(cb_data->h);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
         write(cb_data->fd, cb_data->buffer, cb_data->buffer_used);
         cb_data->buffer_used = 0;
+        gcry_cipher_close(cb_data->h);
     }
 
     if (lseek(cb_data->fd, 0, SEEK_CUR) == 0) {
@@ -110,6 +140,7 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
     return MEDIA_OK;
 
 curlError:
+    if (cb_data->decode) gcry_cipher_close(cb_data->h);
     curl_easy_cleanup(curl);
     free(url);
     return MEDIA_UNEXPECTED_ERROR;
@@ -119,10 +150,30 @@ curlError:
 
 #define BLOCK_SIZE (1<<16)
 
-static inline MediaResp download_media(struct Context* ctx, const char* name, struct write_data *cb_data) {
+static inline MediaResp download_media(struct Context* ctx, const char* name, unsigned char* key, struct write_data *cb_data) {
+    gcry_cipher_hd_t h;
+    if (key == NULL && cb_data->decode) {
+        return MEDIA_UNEXPECTED_ERROR;
+    }
     char* url;
     if (asprintf(&url, "%s" FILES_API_SUF "%s", ctx->base_addr, name) == -1) {
         return MEDIA_UNEXPECTED_ERROR;
+    }
+    if (cb_data->decode) {
+        if (gcry_cipher_open(&h, GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_CTR, 0) != GPG_ERR_NO_ERROR) {
+            free(url);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+        if (gcry_cipher_setkey(h, key, 16) != GPG_ERR_NO_ERROR) {
+            gcry_cipher_close(h);
+            free(url);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
+        if (gcry_cipher_setctr(h, default_counter, 16) != GPG_ERR_NO_ERROR) {
+            gcry_cipher_close(h);
+            free(url);
+            return MEDIA_UNEXPECTED_ERROR;
+        }
     }
 
     stream_t* stream = vlc_stream_NewURL(ctx->vlc_obj, url);
@@ -136,13 +187,24 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
         if (recv_size != BLOCK_SIZE) {
             if (recv_size < 0 || !vlc_stream_Eof(stream)) {
                 vlc_stream_Delete(stream);
+                if (cb_data->decode) gcry_cipher_close(h);
                 return MEDIA_UNEXPECTED_ERROR;
             }
             stop = true;
+            if (cb_data->decode) {
+                if (gcry_cipher_final(h) != GPG_ERR_NO_ERROR) {
+                    vlc_stream_Delete(stream);
+                    gcry_cipher_close(h);
+                    return MEDIA_UNEXPECTED_ERROR;
+                }
+            }
         }
         if (cb_data->decode) {
-            crypto_stream_aes128ctr_xor(buffer, buffer, recv_size, cb_data->counter, cb_data->key);
-            store32_bigendian(&cb_data->counter[12], (recv_size >> 4) + load32_bigendian(&cb_data->counter[12]));
+            if (gcry_cipher_decrypt(h, buffer, recv_size, NULL, 0) != GPG_ERR_NO_ERROR) {
+                vlc_stream_Delete(stream);
+                gcry_cipher_close(h);
+                return MEDIA_UNEXPECTED_ERROR;
+            }
         }
 
         vlc_mutex_lock(&ctx->read_mutex);
@@ -150,15 +212,21 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, st
         if(ctx->stop_download) {
             vlc_mutex_unlock(&ctx->read_mutex);
             vlc_stream_Delete(stream);
+            if (cb_data->decode) gcry_cipher_close(h);
             return MEDIA_UNEXPECTED_ERROR;
         }
 
         write(cb_data->fd, buffer, recv_size);
+        vlc_cond_broadcast(&ctx->read_cond);
         vlc_mutex_unlock(&ctx->read_mutex);
+        usleep(10000);
 
     } while (!stop);
 
     vlc_stream_Delete(stream);
+    if (cb_data->decode) {
+        gcry_cipher_close(h);
+    }
 
     if (lseek(cb_data->fd, 0, SEEK_CUR) == 0) {
         return MEDIA_EMPTY;
@@ -205,7 +273,7 @@ static MediaResp download_root(struct Context* ctx, void** out, size_t* size) {
     struct write_data cb_data = {0};
     cb_data.fd = fd;
     cb_data.decode = false;
-    MediaResp r = download_media(ctx, INDEX_JSON, &cb_data);
+    MediaResp r = download_media(ctx, INDEX_JSON, NULL, &cb_data);
     if (r != MEDIA_OK) {
         close(fd);
         return r;
@@ -251,6 +319,8 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
             return MEDIA_WRONG_PERMS;
         } else if (rkey == RESP_GETKEY_UNKNOW) {
             return MEDIA_UNKNOW;
+        } else if (rkey == RESP_GETKEY_DEBUG_DEVICE) {
+            return MEDIA_DEBUG_DEVICE;
         } else {
             fprintf(stderr, "Unexpected %d\n", rkey);
             return MEDIA_UNEXPECTED_ERROR;
@@ -260,11 +330,8 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
 }
 
 NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remote_name, unsigned char *key, int* fd) {
-    static unsigned char default_counter[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
     struct write_data cb_data = {0};
     cb_data.decode = true;
-    memcpy(cb_data.key, key, 16);
-    memcpy(cb_data.counter, default_counter, 16);
 
     if (*fd < 1) {
         *fd = create_tmp_file();
@@ -273,7 +340,7 @@ NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remo
         }
         cb_data.fd = *fd;
 
-        MediaResp r = download_media(ctx, remote_name, &cb_data);
+        MediaResp r = download_media(ctx, remote_name, key, &cb_data);
         if (r != MEDIA_OK) {
             close(*fd);
             *fd = -1;
@@ -281,7 +348,7 @@ NO_EXPORT MediaResp download_file_with_key(struct Context* ctx, const char* remo
         return r;
     } else {
         cb_data.fd = *fd;
-        return download_media(ctx, remote_name, &cb_data);
+        return download_media(ctx, remote_name, key, &cb_data);
     }
 }
 

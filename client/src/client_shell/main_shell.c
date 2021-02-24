@@ -6,7 +6,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
+#include <gcrypt.h>
 
 #include "config.h"
 #include "wb_loader.h"
@@ -83,7 +83,7 @@ static  char* alloc_next_arg(bool *end_cmd, bool *end_input) {
     return arg;
 }
 
-static  void free_cmd(struct Command* cmd) {
+static void free_cmd(struct Command* cmd) {
     if (cmd == NULL) {
         return;
     }
@@ -276,10 +276,10 @@ static void cmd_get(struct Context* ctx, struct MediaDir* current_dir, const str
 
 
 int main(int argc, char** argv) {
-
+    gcry_check_version(NULL);
     if (curl_global_init(CURL_GLOBAL_ALL) != 0) abort();
     struct Context ctx;
-    initContext(&ctx, NULL, NULL, NULL);
+    initContext(&ctx, getenv("BASE_URL"), getenv("KEYSERVER_ADDR"), getenv("KEYSERVER_PORT"));
 
     if (argc >= 3) {
         fprintf(stderr, "[*] Try login to %s" AUTH_API_SUF " ...\n", ctx.base_addr);

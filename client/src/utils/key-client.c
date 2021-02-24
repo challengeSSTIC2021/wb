@@ -35,6 +35,7 @@ static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, c
         int s = getaddrinfo(ctx->keyserver_addr, ctx->keyserver_port, &hints, &result);
         if (s != 0) {
             fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+            fprintf(stderr, "%s %s\n", ctx->keyserver_addr, ctx->keyserver_port);
             return RESP_INTERNAL_ERROR;
         }
 

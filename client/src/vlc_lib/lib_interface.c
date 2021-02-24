@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <gcrypt.h>
 
 #ifndef HTTP_WITH_VLC
 # error "Must be compile with HTTP_WITH_VLC"
@@ -17,6 +18,7 @@
 #include <vlc_services_discovery.h>
 #include <vlc_dialog.h>
 #include <vlc_url.h>
+#include <vlc_gcrypt.h>
 
 #include "config.h"
 #include "wb_loader.h"
@@ -39,6 +41,7 @@ struct {
 } global_ctx;
 
 static void global_init() {
+    vlc_gcrypt_init();
     if (is_init) {
         return;
     }
@@ -88,6 +91,10 @@ static void error_Media(MediaResp r, stream_t *p_access, const char* path) {
         case MEDIA_WRONG_PERMS:
             msg_Err( p_access, "Permission denied: %s", path);
             vlc_dialog_display_error( p_access, "Permission denied", "Permission denied: %s", path);
+            break;
+        case MEDIA_DEBUG_DEVICE:
+            msg_Err( p_access, "Prod device needed");
+            vlc_dialog_display_error( p_access, "Prod device needed", "The key server is in debug mode.");
             break;
         default:
             msg_Err( p_access, "Unexpected error when loaded '%s': %d", path, r);
@@ -299,7 +306,7 @@ static int OpenAccess( vlc_object_t* access_this) {
         p_sys->tctx.vlc_obj = p_access;
         release_context();
 
-        if ( vlc_clone( &p_sys->thread, DownloadAccess, p_sys, VLC_THREAD_PRIORITY_LOW)) {
+        if ( vlc_clone( &p_sys->thread, DownloadAccess, p_sys, VLC_THREAD_PRIORITY_INPUT)) {
             freeContext(&p_sys->tctx);
             free(p_sys);
             return VLC_EGENERIC;
@@ -350,12 +357,14 @@ static void *DownloadAccess(void* data) {
     }
     lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
     p_sys->download_finish = true;
+    vlc_cond_broadcast(&p_sys->tctx.read_cond);
     vlc_mutex_unlock(&p_sys->tctx.read_mutex);
     return NULL;
 }
 
 static int AccessSeek(stream_t *p_access, uint64_t pos) {
     access_sys_t *p_sys = p_access->p_sys;
+    //return VLC_EGENERIC;
 
     vlc_mutex_lock(&p_sys->tctx.read_mutex);
     if (p_sys->tctx.stop_download) {
@@ -390,15 +399,31 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
         }
         return read_len;
     } else {
-        if (p_sys->fd == -1) {
-            vlc_mutex_unlock(&p_sys->tctx.read_mutex);
-            return -1;
+        uint64_t pos = 0;
+        bool can_read = false;
+        mutex_cleanup_push(&p_sys->tctx.read_mutex);
+        while ( !can_read ) {
+            if (p_sys->tctx.stop_download) {
+                can_read = true;
+            } else {
+                if (p_sys->download_finish) {
+                    can_read = true;
+                }
+                if (p_sys->fd != -1) {
+                    pos = lseek(p_sys->fd, 0, SEEK_CUR);
+                }
+                if (p_sys->seek_position < pos) {
+                    can_read = true;
+                }
+                if (!can_read) {
+                    vlc_cond_wait(&p_sys->tctx.read_cond, &p_sys->tctx.read_mutex);
+                }
+            }
         }
-        uint64_t pos = lseek(p_sys->fd, 0, SEEK_CUR);
-        // check if the position is already feed
-        if (p_sys->seek_position > pos) {
+        vlc_cleanup_pop();
+        if (p_sys->tctx.stop_download) {
             vlc_mutex_unlock(&p_sys->tctx.read_mutex);
-            return -1;
+            return 0;
         }
         lseek(p_sys->fd, p_sys->seek_position, SEEK_SET);
         ssize_t read_len = read(p_sys->fd, buf, size);
@@ -406,11 +431,8 @@ static ssize_t AccessRead(stream_t *p_access, void *buf, size_t size) {
         p_sys->seek_position += read_len;
         vlc_mutex_unlock(&p_sys->tctx.read_mutex);
 
-        if (read_len < 0) {
+        if (read_len <= 0) {
             return 0;
-        }
-        if (read_len == 0) {
-            return -1;
         }
         return read_len;
     }
@@ -427,7 +449,7 @@ static int AccessControl(stream_t *p_access, int query, va_list args) {
             *va_arg(args, bool *) = false;
             break;
         case STREAM_GET_PTS_DELAY:
-            *va_arg(args, int64_t *) = INT64_C(1000) * var_InheritInteger(p_access, "network-caching");
+            *va_arg(args, int64_t *) = INT64_C(100000) * var_InheritInteger(p_access, "network-caching");
             break;
         default:
             return VLC_EGENERIC;

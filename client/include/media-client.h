@@ -13,11 +13,12 @@ typedef enum {
     MEDIA_EMPTY = 1,
     MEDIA_UNKNOW = 2, // remote unkwnon (key not found or http_code != 200)
     MEDIA_WRONG_PERMS = 3,  // key server permission too low
-    MEDIA_VM_PERM_FAIL = 4, // fail to load WB (permission error)
-    MEDIA_VM_ERROR = 5,
-    MEDIA_JSON_ERROR = 6,
-    MEDIA_PATH_INVALID = 7,
-    MEDIA_UNEXPECTED_ERROR = 8
+    MEDIA_DEBUG_DEVICE = 4, // the key server is a debug server and cannot provide production key
+    MEDIA_VM_PERM_FAIL = 5, // fail to load WB (permission error)
+    MEDIA_VM_ERROR = 6,
+    MEDIA_JSON_ERROR = 7,
+    MEDIA_PATH_INVALID = 8,
+    MEDIA_UNEXPECTED_ERROR = 9
 } MediaResp;
 
 struct MediaDir;
