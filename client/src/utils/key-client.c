@@ -34,9 +34,9 @@ static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, c
 
         int s = getaddrinfo(ctx->keyserver_addr, ctx->keyserver_port, &hints, &result);
         if (s != 0) {
-            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
-            fprintf(stderr, "%s %s\n", ctx->keyserver_addr, ctx->keyserver_port);
-            return RESP_INTERNAL_ERROR;
+            debug_printf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+            debug_printf(stderr, "%s %s\n", ctx->keyserver_addr, ctx->keyserver_port);
+            return RESP_CONNECTION_ERROR;
         }
 
         for (rp = result; rp != NULL; rp = rp->ai_next) {
@@ -56,8 +56,8 @@ static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, c
 
         if (rp == NULL || ctx->keyserver_fd == -1) {
             freeaddrinfo(result);
-            fprintf(stderr, "Could not connect\n");
-            return RESP_INTERNAL_ERROR;
+            debug_printf(stderr, "Could not connect\n");
+            return RESP_CONNECTION_ERROR;
         }
 
         freeaddrinfo(result);
@@ -67,7 +67,7 @@ static KeyResp send_recv_(struct Context* ctx, const char* in, size_t in_size, c
         if (s != sizeof(header) || strncmp(header, "STIC", sizeof(header)) != 0) {
             close(ctx->keyserver_fd);
             ctx->keyserver_fd = -1;
-            return RESP_INTERNAL_ERROR;
+            return RESP_CONNECTION_ERROR;
         }
     }
 
@@ -131,10 +131,10 @@ KeyResp check_hsign(struct Context* ctx, struct vmsign* payload, unsigned char* 
         memcpy(plain, &out_msg[1], 16);
         return r;
     } else if (r >= RESP_ERROR_CODE) {
-        fprintf(stderr, "send_recv return %u\n", r);
+        debug_printf(stderr, "send_recv return %u\n", r);
         return r;
     } else {
-        fprintf(stderr, "send_recv return %u\n", r);
+        debug_printf(stderr, "send_recv return %u\n", r);
         return RESP_INTERNAL_ERROR;
     }
 }
@@ -153,10 +153,10 @@ KeyResp getkey(struct Context* ctx, struct vmsign* payload, unsigned char* key) 
         memcpy(key, &out_msg[1], 16);
         return r;
     } else if (r == RESP_GETKEY_EXPIRED || r == RESP_GETKEY_INVALID_PERMS || r == RESP_GETKEY_UNKNOW || r == RESP_GETKEY_DEBUG_DEVICE || r >= RESP_ERROR_CODE) {
-        fprintf(stderr, "send_recv return %u\n", r);
+        debug_printf(stderr, "send_recv return %u\n", r);
         return r;
     } else {
-        fprintf(stderr, "send_recv return %u\n", r);
+        debug_printf(stderr, "send_recv return %u\n", r);
         return RESP_INTERNAL_ERROR;
     }
 }

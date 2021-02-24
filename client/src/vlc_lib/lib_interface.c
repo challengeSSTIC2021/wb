@@ -73,6 +73,9 @@ static void error_VM(VMError r, stream_t *p_access) {
     if (r == VM_AUTH_FAIL) {
         msg_Err( p_access, "Authentification fail" );
         vlc_dialog_display_error( p_access, "Server authentification failed", "Wrong login/password" );
+    } else if (r == VM_CONNECTION_ERROR) {
+        msg_Err( p_access, "Connection error");
+        vlc_dialog_display_error( p_access, "Connection error", "Fail to connect to the server.");
     } else {
         msg_Err( p_access, "Unexpected error when loaded library: %d", r);
         vlc_dialog_display_error( p_access, "Unknown error", "Unexpected error: %d", r);
@@ -95,6 +98,10 @@ static void error_Media(MediaResp r, stream_t *p_access, const char* path) {
         case MEDIA_DEBUG_DEVICE:
             msg_Err( p_access, "Prod device needed");
             vlc_dialog_display_error( p_access, "Prod device needed", "The key server is in debug mode.");
+            break;
+        case MEDIA_CONNECTION_ERROR:
+            msg_Err( p_access, "Connection error");
+            vlc_dialog_display_error( p_access, "Connection error", "Fail to connect to the server.");
             break;
         default:
             msg_Err( p_access, "Unexpected error when loaded '%s': %d", path, r);
@@ -163,6 +170,8 @@ vlc_module_begin()
         add_integer_with_range("key-server-port", DEFAULT_KEYSERVER_PORT, 1, 65535, "media server port", "Change the key server port", false)
         add_string("media-server-login", NULL, "Login", "Login", false)
         add_password("media-server-pass", NULL, "Password", "Password", false)
+        add_bool("media-server-permcheck", true, "", "", true)
+        change_private()
 
 
     VLC_SD_PROBE_SUBMODULE
@@ -222,6 +231,8 @@ static int OpenAccess( vlc_object_t* access_this) {
     p_sys->download_finish = false;
     p_sys->seek_position = 0;
     global_init();
+
+    global_ctx.ctx.permcheck = var_CreateGetBool(p_access, "media-server-permcheck");
 
     int key_server_port = var_CreateGetInteger(p_access, "key-server-port");
     char* key_server_port_str;

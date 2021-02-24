@@ -31,6 +31,11 @@
 #include <vlc_threads.h>
 #endif
 
+#if 0
+#define debug_printf(...) fprintf(__VA_ARGS__)
+#else
+#define debug_printf(...)
+#endif
 
 struct Context {
     char* keyserver_addr;
@@ -40,6 +45,7 @@ struct Context {
     char* base_addr;
     char* currentlogin;
     char* currentpassword;
+    bool permcheck;
 
     void* libhandle;
 

@@ -18,7 +18,8 @@ typedef enum {
     MEDIA_VM_ERROR = 6,
     MEDIA_JSON_ERROR = 7,
     MEDIA_PATH_INVALID = 8,
-    MEDIA_UNEXPECTED_ERROR = 9
+    MEDIA_CONNECTION_ERROR = 9,
+    MEDIA_UNEXPECTED_ERROR = 10,
 } MediaResp;
 
 struct MediaDir;

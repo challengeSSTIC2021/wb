@@ -204,6 +204,9 @@ static void cmd_list(struct Context* ctx, struct MediaDir* current_dir, const st
         case MEDIA_DEBUG_DEVICE:
             fprintf(stderr, "Cannot list %s: need prod device\n", path);
             return;
+        case MEDIA_CONNECTION_ERROR:
+            fprintf(stderr, "Cannot list %s: connection error\n", path);
+            return;
         default:
             fprintf(stderr, "Cannot list %s: error %d\n", path, r);
             return;
@@ -251,6 +254,9 @@ static void cmd_get(struct Context* ctx, struct MediaDir* current_dir, const str
         case MEDIA_WRONG_PERMS:
             fprintf(stderr, "Cannot get %s: permission denied\n", cmd->args[1]);
             return;
+        case MEDIA_CONNECTION_ERROR:
+            fprintf(stderr, "Cannot get %s: connection error\n", cmd->args[1]);
+            return;
         default:
             fprintf(stderr, "Cannot get %s: error %d\n", cmd->args[1], r);
             return;
@@ -272,6 +278,11 @@ static void cmd_get(struct Context* ctx, struct MediaDir* current_dir, const str
             return;
         case MEDIA_DEBUG_DEVICE:
             fprintf(stderr, "Cannot get %s: need prod device\n", cmd->args[1]);
+            close(fd);
+            unlink(cmd->args[2]);
+            return;
+        case MEDIA_CONNECTION_ERROR:
+            fprintf(stderr, "Cannot get %s: connection error\n", cmd->args[1]);
             close(fd);
             unlink(cmd->args[2]);
             return;
@@ -306,6 +317,10 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "[!] Login Fail\n");
                 freeContext(&ctx);
                 return 1;
+            case VM_CONNECTION_ERROR:
+                fprintf(stderr, "[!] Connection error\n");
+                freeContext(&ctx);
+                return 1;
             case VM_OK:
                 fprintf(stderr, "[+] Login OK\n");
                 break;
@@ -320,6 +335,10 @@ int main(int argc, char** argv) {
                 return 1;
             case VM_AUTH_FAIL:
                 fprintf(stderr, "[!] Login Fail\n");
+                freeContext(&ctx);
+                return 1;
+            case VM_CONNECTION_ERROR:
+                fprintf(stderr, "[!] Connection error\n");
                 freeContext(&ctx);
                 return 1;
             case VM_OK:
@@ -343,6 +362,10 @@ int main(int argc, char** argv) {
             return 1;
         case MEDIA_EMPTY:
             fprintf(stderr, "[!] index empty\n");
+            freeContext(&ctx);
+            return 1;
+        case MEDIA_CONNECTION_ERROR:
+            fprintf(stderr, "[!] Connection error\n");
             freeContext(&ctx);
             return 1;
         case MEDIA_OK:
@@ -393,6 +416,11 @@ int main(int argc, char** argv) {
                             free_cmd(&cmdArgs);
                             freeContext(&ctx);
                             return 1;
+                        case MEDIA_CONNECTION_ERROR:
+                            fprintf(stderr, "[!] connexion error\n");
+                            free_cmd(&cmdArgs);
+                            freeContext(&ctx);
+                            return 1;
                         case MEDIA_OK:
                             fprintf(stderr, "[+] Index reloaded\n");
                             break;
@@ -429,6 +457,9 @@ int main(int argc, char** argv) {
                             break;
                         case MEDIA_DEBUG_DEVICE:
                             fprintf(stderr, "Cannot open %s: need prod device\n", cmdArgs.args[1]);
+                            break;
+                        case MEDIA_CONNECTION_ERROR:
+                            fprintf(stderr, "Cannot open %s: connexion error\n", cmdArgs.args[1]);
                             break;
                         default:
                             fprintf(stderr, "Cannot open %s: error %d\n", cmdArgs.args[1], r);

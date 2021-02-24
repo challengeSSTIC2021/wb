@@ -177,6 +177,10 @@ static inline MediaResp download_media(struct Context* ctx, const char* name, un
     }
 
     stream_t* stream = vlc_stream_NewURL(ctx->vlc_obj, url);
+    if (stream == NULL) {
+        if (cb_data->decode) gcry_cipher_close(h);
+        return MEDIA_CONNECTION_ERROR;
+    }
 
     unsigned char buffer[BLOCK_SIZE] = {0};
     size_t recv_size;
@@ -292,6 +296,8 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
         if (rvm != VM_OK) {
             if (rvm == VM_AUTH_FAIL) {
                 return MEDIA_VM_PERM_FAIL;
+            } else if (rvm == VM_CONNECTION_ERROR) {
+                return MEDIA_CONNECTION_ERROR;
             } else {
                 return MEDIA_VM_ERROR;
             }
@@ -305,6 +311,8 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
             if (rvm != VM_OK) {
                 if (rvm == VM_AUTH_FAIL) {
                     return MEDIA_VM_PERM_FAIL;
+                } else if (rvm == VM_CONNECTION_ERROR) {
+                    return MEDIA_CONNECTION_ERROR;
                 } else {
                     return MEDIA_VM_ERROR;
                 }
@@ -317,10 +325,12 @@ NO_EXPORT MediaResp get_file_key(struct Context* ctx, uint64_t ident, unsigned c
             return MEDIA_WRONG_PERMS;
         } else if (rkey == RESP_GETKEY_UNKNOW) {
             return MEDIA_UNKNOW;
+        } else if (rkey == RESP_CONNECTION_ERROR) {
+            return MEDIA_CONNECTION_ERROR;
         } else if (rkey == RESP_GETKEY_DEBUG_DEVICE) {
             return MEDIA_DEBUG_DEVICE;
         } else {
-            fprintf(stderr, "Unexpected %d\n", rkey);
+            debug_printf(stderr, "Unexpected %d\n", rkey);
             return MEDIA_UNEXPECTED_ERROR;
         }
     }
@@ -425,9 +435,12 @@ MediaResp download_file(struct Context* ctx, struct MediaFile* file, int* fd) {
     if (file == NULL || fd == NULL || ctx == NULL) {
         return MEDIA_UNEXPECTED_ERROR;
     }
-    uint64_t current_perm = get_current_permission(ctx);
-    if (current_perm > file->perm) {
-        return MEDIA_WRONG_PERMS;
+
+    if (ctx->permcheck) {
+        uint64_t current_perm = get_current_permission(ctx);
+        if (current_perm > file->perm) {
+            return MEDIA_WRONG_PERMS;
+        }
     }
 
     return download_ident(ctx, file->remote_name, file->ident, fd);
@@ -599,9 +612,11 @@ MediaResp open_dir(struct Context* ctx, struct MediaDir* dir) {
         return MEDIA_UNEXPECTED_ERROR;
     }
 
-    uint64_t current_perm = get_current_permission(ctx);
-    if (current_perm > dir->perm) {
-        return MEDIA_WRONG_PERMS;
+    if (ctx->permcheck) {
+        uint64_t current_perm = get_current_permission(ctx);
+        if (current_perm > dir->perm) {
+            return MEDIA_WRONG_PERMS;
+        }
     }
 
     int fd = 0;

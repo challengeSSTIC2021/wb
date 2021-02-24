@@ -24,6 +24,7 @@ void freeContext(struct Context* ctx) {
 #endif
     memset(ctx, '\0', sizeof(struct Context));
     ctx->keyserver_fd = -1;
+    ctx->permcheck = true;
 #ifdef HTTP_WITH_VLC
     ctx->stop_download = false;
 #endif
@@ -36,6 +37,7 @@ void initContext(struct Context* ctx, char* base_url, char* key_server_url, char
 
     memset(ctx, '\0', sizeof(struct Context));
     ctx->keyserver_fd = -1;
+    ctx->permcheck = true;
 #ifdef HTTP_WITH_VLC
     ctx->stop_download = false;
 

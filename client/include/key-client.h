@@ -22,6 +22,7 @@ typedef enum {
     RESP_ERROR_CODE = 0xf0,
     RESP_REQUEST_ERROR = 0xfe,
     RESP_UNEXPECTED_ERROR = 0xff,
+    RESP_CONNECTION_ERROR = 0xfffffffe,
     RESP_INTERNAL_ERROR = 0xffffffff,
 } KeyResp;
 

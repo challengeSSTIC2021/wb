@@ -10,6 +10,7 @@ typedef enum {
     VM_OK = 0,
     VM_SIGN_FAIL = 1,
     VM_AUTH_FAIL = 2,
+    VM_CONNECTION_ERROR = 0xfe,
     VM_INTERNAL_ERROR = 0xff,
 } VMError;
 

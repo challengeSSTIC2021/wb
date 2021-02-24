@@ -203,7 +203,7 @@ static inline VMError open_state_internal(struct Context* ctx) {
         close(fd);
         free(url);
         unlink(path);
-        return VM_INTERNAL_ERROR;
+        return VM_CONNECTION_ERROR;
     }
 
     unsigned char buffer[BLOCK_SIZE] = {0};
@@ -265,11 +265,17 @@ static VMError open_state(struct Context* ctx) {
                 KeyResp r = check_hsign(ctx, &s, out);
                 if (r == RESP_CHECK_OK && (*((uint64_t*) out) == 0) && (*((uint64_t*) &out[8]) == suffix)) {
                     return VM_OK;
+                } else if (r == RESP_CONNECTION_ERROR) {
+                    close_state(ctx);
+                    return VM_CONNECTION_ERROR;
+                } else if (r == RESP_INTERNAL_ERROR) {
+                    close_state(ctx);
+                    return VM_INTERNAL_ERROR;
                 } else {
-                    fprintf(stderr, "[%d] check_hsign return %d\n", i, r);
+                    debug_printf(stderr, "[%d] check_hsign return %d\n", i, r);
                 }
             } else {
-                fprintf(stderr, "[%d] hsign_raw return %d\n", i, res);
+                debug_printf(stderr, "[%d] hsign_raw return %d\n", i, res);
             }
         } else {
             close_state(ctx);
@@ -281,6 +287,7 @@ static VMError open_state(struct Context* ctx) {
         }
         sleep(1);
     }
+    close_state(ctx);
     return VM_INTERNAL_ERROR;
 }
 
