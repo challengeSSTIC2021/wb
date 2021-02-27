@@ -334,6 +334,60 @@ def check(input_data, input_dir, keys, output_dir, index, current_dir=".", curre
         # all input_file has been check
         assert input_data == []
 
+
+def output_raw_key(keys, output_file):
+    debug_ids = []
+    prod_ids = []
+    debug_keys_str = []
+    prod_keys_str = []
+    file_perms = []
+
+    for k in keys:
+        file_perms.append("{{ 0x{:016x}, 0x{:x} }}".format(k['ident'], k['perms']))
+        ident = "0x{:016x}".format(k['ident'])
+        key_str = '"' + "".join(["\\x"+ k['key'][i:i+2] for i in range(0, 32, 2)]) + '"'
+        if (k['ident'] & (1<<63)) != 0:
+            # prod key
+            prod_ids.append(ident)
+            prod_keys_str.append(key_str)
+        else:
+            debug_ids.append(ident)
+            debug_keys_str.append(key_str)
+
+    debug_ids.append("0")
+    prod_ids.append("0")
+    debug_keys_str.append("NULL")
+    prod_keys_str.append("NULL")
+
+    data = """
+// to insert in hw/misc/sstic.c
+
+const uint64_t debug_ids[] = {{ {debug_ids} }};
+const uint64_t prod_ids[] = {{ {prod_ids} }};
+
+const char* debug_keys[] = {{
+    {debug_keys_str}
+}};
+
+const char* prod_keys[] = {{
+    {prod_keys_str}
+}};
+
+// to insert in service.c
+const struct file_info file_perms[] = {{
+    {file_perms}
+}};""".format(
+            debug_ids=", ".join(debug_ids),
+            prod_ids=", ".join(prod_ids),
+            debug_keys_str=",\n    ".join(debug_keys_str),
+            prod_keys_str=",\n    ".join(prod_keys_str),
+            file_perms=",\n    ".join(file_perms))
+
+    with open(output_file, "w") as f:
+        f.write(data)
+
+
+
 if __name__ == '__main__':
 
     import argparse
@@ -347,6 +401,7 @@ if __name__ == '__main__':
     parser.add_argument("-I", "--input-json", type=str, help="json input files", default="files.json")
     parser.add_argument("-o", "--output-dir", type=str, help="output file directory", default="output")
     parser.add_argument("-k", "--output-key", type=str, help="output key files", default="keys.json")
+    parser.add_argument("-K", "--output-key-raw", type=str, help="output key files", default="keys.c")
 
     args = parser.parse_args()
 
@@ -370,6 +425,9 @@ if __name__ == '__main__':
     if os.path.exists(args.output_key) and not os.path.isfile(args.output_key):
         parser.error('{} exists and is not a file'.format(args.output_key))
 
+    if os.path.exists(args.output_key_raw) and not os.path.isfile(args.output_key_raw):
+        parser.error('{} exists and is not a file'.format(args.output_key_raw))
+
     if not args.no_run:
 
         if not os.path.isdir(args.output_dir):
@@ -386,6 +444,8 @@ if __name__ == '__main__':
         keys = [{"ident": i, **d} for i, d in keys.items()]
         with open(args.output_key, 'w') as f:
             f.write(convert_json(keys, pretty=True))
+
+        output_raw_key(keys, args.output_key_raw)
 
     if args.check:
 
