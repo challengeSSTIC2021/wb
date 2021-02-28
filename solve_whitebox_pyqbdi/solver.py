@@ -36,7 +36,8 @@ class Tracer:
     def __init__(self, path):
         self.lib = ctypes.cdll.LoadLibrary(path)
         self.addr_getSuffix = ctypes.cast(self.lib.getSuffix, ctypes.c_void_p).value
-        self.addr_encryptVM = ctypes.cast(self.lib.runVM, ctypes.c_void_p).value
+        self.addr_encryptVM = ctypes.cast(self.lib.useVM, ctypes.c_void_p).value
+        self.addr_getIdent = ctypes.cast(self.lib.getIdent, ctypes.c_void_p).value
 
         # init VM
         self.vm = pyqbdi.VM()
@@ -51,6 +52,7 @@ class Tracer:
         self.vm.addInstrumentedModuleFromAddr(self.addr_getSuffix)
 
         self.suffix = self.run_getSuffix()
+        self.wb_ident = self.run_getIdent()
         self.message = b"\x00" * 8 + self.suffix
 
         # other variable
@@ -67,6 +69,7 @@ class Tracer:
 
     def __del__(self):
         pyqbdi.alignedFree(self.stack_addr)
+        del self.vm
 
     def reset_vm(self):
         self.vm.deleteAllInstrumentations()
@@ -79,6 +82,18 @@ class Tracer:
 
     def is_table_addr(self, addr):
         return self.table_range[0] <= addr and addr < self.table_range[1]
+
+    def run_getIdent(self):
+        backup_rsp = self.vm.getGPRState().rsp
+
+        output_addr = pyqbdi.allocateMemory(4)
+        asrun, ret = self.vm.call(self.addr_getIdent, [output_addr])
+        assert asrun
+        ident = pyqbdi.readMemory(output_addr, 4)
+        pyqbdi.freeMemory(output_addr)
+
+        self.vm.getGPRState().rsp = backup_rsp
+        return ident
 
     def run_getSuffix(self):
         backup_rsp = self.vm.getGPRState().rsp
