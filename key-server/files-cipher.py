@@ -279,7 +279,7 @@ def run(conf, input_dir, output_dir):
 def check_file(entry, directory, plain, input_data, input_dir, prod_only):
     found = None
 
-    for i in range(len(input_dir)):
+    for i in range(len(input_data)):
         # same directory and real name
         if ( entry['real_name'] == os.path.basename(input_data[i]['name']) and
                 os.path.normpath(directory) == os.path.normpath(input_data[i]['outdir'])):

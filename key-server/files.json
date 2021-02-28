@@ -6,6 +6,11 @@
         "perms": 1
     }, {
         "name": "sample.mp4",
+        "outdir": "./user0",
+        "type": "mp4",
+        "perms": 1
+    }, {
+        "name": "sample.mp4",
         "outdir": "./guest/prod",
         "type": "mp4",
         "prod": true,
