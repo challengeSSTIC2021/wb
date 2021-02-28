@@ -1,4 +1,4 @@
-version: "3"
+version: "2.4"
 services:
   web:
     build: ./nginx
@@ -10,6 +10,10 @@ services:
       - /home/kaname/SSTIC/chall2021/nginx_files:/var/www/files
     cap_drop:
       - ALL
+    restart: always
+    cpu_count: 1
+    cpus: '1'
+    mem_limit: 200M
   build:
     build: ./whitebox_builder
     # set the key after -k
@@ -21,6 +25,10 @@ services:
     cap_drop:
       - ALL
     network_mode: "none"
+    restart: always
+    cpu_count: 1
+    cpus: '0.50'
+    mem_limit: 250M
 volumes:
   sharedVol: {}
   filesVol: {}
