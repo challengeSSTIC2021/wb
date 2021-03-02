@@ -7,7 +7,7 @@ services:
     volumes:
       - sharedVol:/var/www/api/.wb_generator
         #- filesVol:/var/www/files
-      - /home/kaname/SSTIC/chall2021/nginx_files:/var/www/files
+      - /srv/static_files:/var/www/files
     cap_drop:
       - ALL
     restart: always

@@ -23,7 +23,7 @@ RUN apt-get update && \
     python3 -m pip install python_camellia pycryptodome && \
     rm -rf /var/lib/apt/lists/*
 
-RUN adduser --disabled-password --gecos '' $USER
+RUN adduser --disabled-password --gecos '' --uid 10000 $USER
 
 WORKDIR $HOME
 
@@ -34,5 +34,7 @@ RUN mkdir $OUT_DIR && \
     chmod -R a-w $HOME/whitebox
 
 USER $USER
+
+VOLUME $OUT_DIR
 
 ENTRYPOINT ["python3", "./whitebox/docker_script/runner.py"]
