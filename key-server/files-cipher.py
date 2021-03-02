@@ -437,7 +437,7 @@ if __name__ == '__main__':
         if args.clean:
             for filename in os.listdir(args.output_dir):
                 file_path = os.path.join(args.output_dir, filename)
-                if os.path.isfile(file_path):
+                if os.path.isfile(file_path) and file_path.endswith(".enc"):
                     os.unlink(file_path)
 
         keys = run(input_data, args.input_dir, args.output_dir)
