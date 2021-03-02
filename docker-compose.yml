@@ -19,7 +19,7 @@ services:
     # set the key after -k
     # set the time between two compile after -t
     # set the suffix after -s
-    command: ["-k", "8899aabbccddeeff0011223344556677", "-t", "900", "-s", "0011223344556677"]
+    command: ["-k", "8899aabbccddeeff0011223344556677", "-t", "900", "-s", "ffffffffffffffff"]
     volumes:
       - sharedVol:/home/docker-user/out
     cap_drop:
