@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from mycamellia import bit_xor, bit_rol, swap, _F_part, KSFT1, camellia_keygen, Feistel
 from functionP import P_inv
