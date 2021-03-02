@@ -13,7 +13,7 @@ services:
     restart: always
     cpu_count: 1
     cpus: '1'
-    mem_limit: 200M
+    mem_limit: 500M
   build:
     build: ./whitebox_builder
     # set the key after -k
