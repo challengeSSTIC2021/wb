@@ -18,14 +18,14 @@
 #include "config.h"
 
 static inline VMError hsign_raw(struct Context* ctx, uint64_t toSign, struct vmsign* out) {
-    if (ctx->getSuffix == NULL || ctx->getIdent == NULL || ctx->useVM == NULL) {
+    if (ctx->getPerms == NULL || ctx->getIdent == NULL || ctx->useVM == NULL) {
         return VM_INTERNAL_ERROR;
     }
     ctx->getIdent((unsigned char*) out->ident);
 
     unsigned char b[16];
     *( (uint64_t*) &b) = toSign;
-    ctx->getSuffix(&b[8]);
+    ctx->getPerms(&b[8]);
 
     int t = ctx->useVM(b, (unsigned char*) out->data);
     if (t != 0) {
@@ -43,7 +43,7 @@ static VMError close_state(struct Context* ctx) {
     dlclose(ctx->libhandle);
     ctx->libhandle = NULL;
     ctx->useVM = NULL;
-    ctx->getSuffix = NULL;
+    ctx->getPerms = NULL;
     ctx->getIdent = NULL;
 
     return VM_OK;
@@ -127,10 +127,10 @@ static inline VMError open_state_internal(struct Context* ctx) {
     }
 
     ctx->useVM = (int (*)(const unsigned char*, unsigned char*)) dlsym(ctx->libhandle, "useVM");
-    ctx->getSuffix = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getPerms");
+    ctx->getPerms = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getPerms");
     ctx->getIdent = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getIdent");
 
-    if (ctx->useVM == NULL || ctx->getSuffix == NULL || ctx->getIdent == NULL) {
+    if (ctx->useVM == NULL || ctx->getPerms == NULL || ctx->getIdent == NULL) {
         close_state(ctx);
         return VM_INTERNAL_ERROR;
     }
@@ -236,10 +236,10 @@ static inline VMError open_state_internal(struct Context* ctx) {
     }
 
     ctx->useVM = (int (*)(const unsigned char*, unsigned char*)) dlsym(ctx->libhandle, "useVM");
-    ctx->getSuffix = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getSuffix");
+    ctx->getPerms = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getPerms");
     ctx->getIdent = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getIdent");
 
-    if (ctx->useVM == NULL || ctx->getSuffix == NULL || ctx->getIdent == NULL) {
+    if (ctx->useVM == NULL || ctx->getPerms == NULL || ctx->getIdent == NULL) {
         close_state(ctx);
         return VM_INTERNAL_ERROR;
     }
@@ -351,7 +351,7 @@ VMError relogin(struct Context* ctx) {
 }
 
 uint64_t get_current_permission(struct Context* ctx) {
-    if (ctx->getSuffix == NULL) {
+    if (ctx->getPerms == NULL) {
         VMError res = open_state(ctx);
         if (res != VM_OK) {
             return 0xffffffffffffffff;
@@ -359,7 +359,7 @@ uint64_t get_current_permission(struct Context* ctx) {
     }
 
     uint64_t res;
-    ctx->getSuffix( (unsigned char*) &res);
+    ctx->getPerms( (unsigned char*) &res);
     return res;
 }
 
@@ -367,7 +367,7 @@ VMError hsign(struct Context* ctx, uint64_t toSign, struct vmsign* out) {
     if (ctx == NULL) {
         return VM_INTERNAL_ERROR;
     }
-    if (ctx->getSuffix == NULL || ctx->getIdent == NULL || ctx->useVM == NULL) {
+    if (ctx->getPerms == NULL || ctx->getIdent == NULL || ctx->useVM == NULL) {
         VMError res = open_state(ctx);
         if (res != VM_OK) {
             return res;

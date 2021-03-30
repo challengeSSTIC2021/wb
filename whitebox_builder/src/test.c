@@ -16,7 +16,7 @@ int main() {
   unsigned char message[16] = {0};
   unsigned char out[16] = {0};
 
-  getSuffix(&message[8]);
+  getPerms(&message[8]);
 
   printf("input: ");
   printHex(message, 16);

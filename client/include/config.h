@@ -50,7 +50,7 @@ struct Context {
     void* libhandle;
 
     int (*useVM)(const unsigned char*, unsigned char*);
-    int (*getSuffix)(unsigned char*);
+    int (*getPerms)(unsigned char*);
     int (*getIdent)(unsigned char*);
 
 #ifdef HTTP_WITH_VLC
