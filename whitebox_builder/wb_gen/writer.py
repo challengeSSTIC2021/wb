@@ -562,7 +562,7 @@ __attribute__((visibility("default"))) int useVM(const unsigned char* input, uns
     return runVM(buff, output);
 }}
 
-__attribute__((visibility("default"))) int getSuffix(unsigned char* output) {{
+__attribute__((visibility("default"))) int getPerms(unsigned char* output) {{
     unsigned char buff = {param_getSuffix};
     return runVM(&buff, output);
 }}

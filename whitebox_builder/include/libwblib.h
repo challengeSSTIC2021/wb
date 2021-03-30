@@ -10,7 +10,7 @@ static const unsigned output_size = 16;
 // output: the cipher of the 16 bytes messages
 int useVM(const unsigned char* input, unsigned char* output);
 
-int getSuffix(unsigned char* suffix);
+int getPerms(unsigned char* suffix);
 
 int getIdent(unsigned char* suffix);
 

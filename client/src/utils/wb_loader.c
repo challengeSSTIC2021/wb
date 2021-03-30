@@ -127,7 +127,7 @@ static inline VMError open_state_internal(struct Context* ctx) {
     }
 
     ctx->useVM = (int (*)(const unsigned char*, unsigned char*)) dlsym(ctx->libhandle, "useVM");
-    ctx->getSuffix = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getSuffix");
+    ctx->getSuffix = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getPerms");
     ctx->getIdent = (int (*)(unsigned char*)) dlsym(ctx->libhandle, "getIdent");
 
     if (ctx->useVM == NULL || ctx->getSuffix == NULL || ctx->getIdent == NULL) {
