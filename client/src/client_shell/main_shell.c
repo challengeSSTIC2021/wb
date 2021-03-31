@@ -304,6 +304,7 @@ int main(int argc, char** argv) {
     if (curl_global_init(CURL_GLOBAL_ALL) != 0) abort();
     struct Context ctx;
     initContext(&ctx, getenv("BASE_URL"), getenv("KEYSERVER_ADDR"), getenv("KEYSERVER_PORT"));
+    ctx.permcheck = false;
 
     if (argc >= 3) {
         fprintf(stderr, "[*] Try login to %s" AUTH_API_SUF " ...\n", ctx.base_addr);
