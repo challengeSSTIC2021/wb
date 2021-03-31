@@ -35,7 +35,7 @@ class Tracer:
 
     def __init__(self, path):
         self.lib = ctypes.cdll.LoadLibrary(path)
-        self.addr_getSuffix = ctypes.cast(self.lib.getSuffix, ctypes.c_void_p).value
+        self.addr_getPerms = ctypes.cast(self.lib.getPerms, ctypes.c_void_p).value
         self.addr_encryptVM = ctypes.cast(self.lib.useVM, ctypes.c_void_p).value
         self.addr_getIdent = ctypes.cast(self.lib.getIdent, ctypes.c_void_p).value
 
@@ -49,11 +49,14 @@ class Tracer:
         self.stack_range = (self.stack_addr, self.stack_addr+0x100000)
 
         # add instrumentation range
-        self.vm.addInstrumentedModuleFromAddr(self.addr_getSuffix)
+        self.vm.addInstrumentedModuleFromAddr(self.addr_getPerms)
 
-        self.suffix = self.run_getSuffix()
+        self.suffix = self.run_getPerms()
         self.wb_ident = self.run_getIdent()
         self.message = b"\x00" * 8 + self.suffix
+
+        print("Suffix : ", self.suffix.hex())
+        print("timestamp : ", self.wb_ident.hex())
 
         # other variable
         self.opcodeload_addr = 0
@@ -95,11 +98,11 @@ class Tracer:
         self.vm.getGPRState().rsp = backup_rsp
         return ident
 
-    def run_getSuffix(self):
+    def run_getPerms(self):
         backup_rsp = self.vm.getGPRState().rsp
 
         output_addr = pyqbdi.allocateMemory(8)
-        asrun, ret = self.vm.call(self.addr_getSuffix, [output_addr])
+        asrun, ret = self.vm.call(self.addr_getPerms, [output_addr])
         assert asrun
         suffix = pyqbdi.readMemory(output_addr, 8)
         pyqbdi.freeMemory(output_addr)
