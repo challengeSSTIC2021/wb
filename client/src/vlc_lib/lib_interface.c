@@ -254,10 +254,10 @@ static int OpenAccess( vlc_object_t* access_this) {
     char* password = var_CreateGetString(p_access, "media-server-pass");
     VMError r;
     if (login == NULL || password == NULL || *login == '\0' || *password == '\0') {
-        msg_Info(p_access, "Log as guest");
+        msg_Dbg(p_access, "Log as guest");
         r = remote_login(&global_ctx.ctx, NULL, NULL);
     } else {
-        msg_Info(p_access, "Log as %s", login);
+        msg_Dbg(p_access, "Log as %s", login);
         r = remote_login(&global_ctx.ctx, login, password);
     }
     free(login);
@@ -270,7 +270,7 @@ static int OpenAccess( vlc_object_t* access_this) {
         return VLC_EGENERIC;
     }
 
-    msg_Info(p_access, "Success load library");
+    msg_Dbg(p_access, "Success load library");
 
     if (!global_ctx.root_index.is_open) {
         MediaResp mr = open_index(&global_ctx.ctx, &global_ctx.root_index);
@@ -286,7 +286,7 @@ static int OpenAccess( vlc_object_t* access_this) {
     p_sys->dir = NULL;
     p_sys->file = NULL;
     MediaResp mr;
-    msg_Info(p_access, "Look for %s", p_access->psz_location);
+    msg_Dbg(p_access, "Look for %s", p_access->psz_location);
     if (p_access->psz_location[0] == '\0' || p_access->psz_location[strlen(p_access->psz_location) - 1] == '/') {
         p_sys->is_dir = true;
         mr = get_dir(&global_ctx.ctx, &global_ctx.root_index, p_access->psz_location, &p_sys->dir);
@@ -481,7 +481,7 @@ static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
             return VLC_ENOMEM;
         }
 
-        msg_Info(p_access, "Add File %s", full_path);
+        msg_Dbg(p_access, "Add File %s", full_path);
         vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->files[i].name, ITEM_TYPE_FILE, ITEM_NET_UNKNOWN);
         free(path);
         free(encode_remote);
@@ -509,7 +509,7 @@ static int AccessReadDir(stream_t *p_access, input_item_node_t* item) {
             return VLC_ENOMEM;
         }
 
-        msg_Info(p_access, "Add directory %s", full_path);
+        msg_Dbg(p_access, "Add directory %s", full_path);
         vlc_readdir_helper_additem(&rdh, full_path, NULL, p_sys->dir->subdir[i].name, ITEM_TYPE_DIRECTORY, ITEM_NET_UNKNOWN);
         free(path);
         free(encode_remote);
