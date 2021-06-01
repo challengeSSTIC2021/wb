@@ -4,7 +4,7 @@
 #define STR_(name) #name
 #define STR_NAME(name) STR_(name)
 
-#define DEFAULT_BASE_URL "http://challenge2021.sstic.org:8080"
+#define DEFAULT_BASE_URL "http://localhost:8080"
 
 // WHITEBOX GEN API
 #define AUTH_API_SUF "/api/auth.so"
@@ -16,7 +16,7 @@
 #define TIMEOUT_VM 3600
 
 // KEY SERVER URL
-#define DEFAULT_KEYSERVER_ADDRESS "62.210.125.243"
+#define DEFAULT_KEYSERVER_ADDRESS "127.0.0.1"
 #define DEFAULT_KEYSERVER_PORT 1337
 
 #define DEFAULT_KEYSERVER_PORT_STR STR_NAME(DEFAULT_KEYSERVER_PORT)
